@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <link rel="stylesheet" type="text/css" href="style.css">
+  <style>
+    #debug { position: fixed; left: 8px; top: 8px; z-index: 99999; color: #0f0; background:#000c; padding:8px; font:12px monospace; max-width: 90vw; white-space: pre-wrap; }
+  </style>
+  <script>
+    window.__dbg = (m) => {
+      const el = document.getElementById('debug');
+      if (el) el.textContent += m + "\n";
+    };
+    window.onerror = (msg, src, line, col, err) => {
+      window.__dbg(`[onerror] ${msg} @ ${src}:${line}:${col}`);
+    };
+    window.addEventListener('unhandledrejection', (e) => {
+      window.__dbg(`[promise] ${e.reason}`);
+    });
+  </script>
+</head>
+<body>
+  <div id="debug">boot\n</div>
+  <main></main>
+
+  <script src="p5.js" onload="__dbg('p5.js loaded')" onerror="__dbg('p5.js FAILED')"></script>
+  <script src="flowfield.js" onload="__dbg('flowfield loaded')" onerror="__dbg('flowfield FAILED')"></script>
+</body>
+</html>
