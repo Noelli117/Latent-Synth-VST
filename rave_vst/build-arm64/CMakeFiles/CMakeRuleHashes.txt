@@ -1,0 +1,8 @@
+# Hashes of file build rules.
+68d9aedd764d6c7d44538e1348c7c621 juce_binarydata_rave-vst-Assets/JuceLibraryCode/BinaryData1.cpp
+07c5880c71df0f0f063f83d07c9974e5 rave-vst_artefacts/JuceLibraryCode/JuceHeader.h
+7727339ae641afc7903b4290af8e7503 rave-vst_artefacts/JuceLibraryCode/rave-vst_AU/PkgInfo
+f34e9cbf5bea973f9661ac4681d7e90f rave-vst_artefacts/JuceLibraryCode/rave-vst_AU/secret/JucePluginDefines.h
+ba5a5a10910ac5aec845070179a89d82 rave-vst_artefacts/JuceLibraryCode/rave-vst_AU/secret/latent_synth_v3.rsrc
+efc2edce3911a7051ad0dae41f14016f rave-vst_artefacts/JuceLibraryCode/rave-vst_Standalone/PkgInfo
+344c2675dccb5d9701175c2c2a3c03af rave-vst_artefacts/JuceLibraryCode/rave-vst_VST3/PkgInfo

@@ -1,0 +1,12 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/likejie/Desktop/Graduation/EP-491 assets/rave_vst/build-arm64/cmake_install.cmake",
+		"/Users/likejie/Desktop/Graduation/EP-491 assets/rave_vst/build-arm64/juce/cmake_install.cmake",
+		"/Users/likejie/Desktop/Graduation/EP-491 assets/rave_vst/build-arm64/juce/modules/cmake_install.cmake",
+		"/Users/likejie/Desktop/Graduation/EP-491 assets/rave_vst/build-arm64/juce/extras/Build/cmake_install.cmake",
+		"/Users/likejie/Desktop/Graduation/EP-491 assets/rave_vst/build-arm64/juce/extras/Build/juceaide/cmake_install.cmake",
+		"/Users/likejie/Desktop/Graduation/EP-491 assets/rave_vst/build-arm64/source/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
