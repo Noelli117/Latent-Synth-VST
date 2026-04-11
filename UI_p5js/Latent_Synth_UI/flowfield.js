@@ -37,6 +37,8 @@ let lastSentRadius = NaN;
 let lastSentGlobal = new Array(LATENT_DIM).fill(NaN);
 let lastSentScale = new Array(LATENT_DIM).fill(NaN);
 let lastSentBias = new Array(LATENT_DIM).fill(NaN);
+let lastSentLatentJitter = NaN;
+let lastSentStereoWidth = NaN;
 
 let radius = 0;
 
@@ -165,6 +167,76 @@ function sendHostAction(action, params = {}) {
 
 function loadHostModelsFile(onDone) {
   loadHostScriptPayload("host-models-script", "host_models.js", "__hostModels", onDone);
+}
+
+function loadHostLatentStateFile(onDone) {
+  loadHostScriptPayload(
+    "host-latent-state-script",
+    "host_latent_state.js",
+    "__hostLatentState",
+    onDone
+  );
+}
+
+function applyHostLatentState(data) {
+  if (!data) return;
+
+  const mode = data.mode === "global" ? 0 : 1;
+  uiMode = mode;
+
+  const scaleValues = Array.isArray(data.scale) ? data.scale : [];
+  const biasValues = Array.isArray(data.bias) ? data.bias : [];
+  const latentValues = Array.isArray(data.latent) ? data.latent : [];
+  const flowSpeed = Number.isFinite(Number(data.flowSpeed)) ? Number(data.flowSpeed) : 5;
+  const flowNoiseScale = Number.isFinite(Number(data.flowNoiseScale)) ? Number(data.flowNoiseScale) : 0.0255;
+  const flowCurve = Number.isFinite(Number(data.flowCurve)) ? Number(data.flowCurve) : 2.25;
+  const flowGainValue = Number.isFinite(Number(data.flowGain)) ? Number(data.flowGain) : 0.155;
+  const flowContrastValue = Number.isFinite(Number(data.flowContrast)) ? Number(data.flowContrast) : 0.475;
+  const flowIntensityValue = Number.isFinite(Number(data.flowIntensity)) ? Number(data.flowIntensity) : 0.65;
+  const latentJitterValue = Number.isFinite(Number(data.latentJitter)) ? Number(data.latentJitter) : 0;
+  const stereoWidthValue = Number.isFinite(Number(data.stereoWidth)) ? Number(data.stereoWidth) : 100;
+
+  if (knobSpeed) knobSpeed.setValue(flowSpeed);
+  if (knobNoise) knobNoise.setValue(flowNoiseScale);
+  if (knobCurve) knobCurve.setValue(flowCurve);
+  if (knobFlowGain) knobFlowGain.setValue(flowGainValue);
+  if (knobContrast) knobContrast.setValue(flowContrastValue);
+  if (knobIntensity) knobIntensity.setValue(flowIntensityValue);
+  if (knobLatentNoise) knobLatentNoise.setValue(latentJitterValue);
+  if (knobStereoWidth) knobStereoWidth.setValue(stereoWidthValue);
+
+  const latentPairs = getLatentKnobPairs();
+  for (let i = 0; i < latentPairs.length; i++) {
+    const biasValue = Number.isFinite(Number(biasValues[i])) ? Number(biasValues[i]) : 0;
+    const scaleValue = Number.isFinite(Number(scaleValues[i])) ? Number(scaleValues[i]) : 1;
+    latentPairs[i][0].setValue(biasValue);
+    latentPairs[i][1].setValue(scaleValue);
+    bias[i] = biasValue;
+    scale[i] = scaleValue;
+    latent[i] = Number.isFinite(Number(latentValues[i])) ? Number(latentValues[i]) : latent[i];
+    targetLatent[i] = latent[i];
+  }
+}
+
+function requestHostLatentState() {
+  const req = sendHostAction("native_fold_get");
+
+  const poll = (triesLeft) => {
+    loadHostLatentStateFile((data) => {
+      if (data && (!req || !data.req || data.req === req)) {
+        applyHostLatentState(data);
+        return;
+      }
+
+      if (triesLeft > 0) {
+        setTimeout(() => poll(triesLeft - 1), 120);
+      } else if (window.__hostLatentState) {
+        applyHostLatentState(window.__hostLatentState);
+      }
+    });
+  };
+
+  poll(12);
 }
 
 function fillLocalModelSelect(localModels, selectedPath = "") {
@@ -496,6 +568,14 @@ function applyNativeFoldParams(params) {
     }
   }
 
+  if ("latent_jitter" in params && knobLatentNoise) {
+    knobLatentNoise.setValue(Number(params.latent_jitter));
+  }
+
+  if ("output_width" in params && knobStereoWidth) {
+    knobStereoWidth.setValue(Number(params.output_width));
+  }
+
   const fftSize = params.fft_size ? Math.round(Number(params.fft_size)) : 0;
   setNativeFoldStatus(fftSize > 0 ? `FFT Size: ${fftSize}` : "Params synced");
 }
@@ -783,6 +863,9 @@ function setup() {
     [knobBias7, knobScale7],
   ];
 
+  requestNativeFoldParams();
+  requestHostLatentState();
+
 }
 
 // Normalize direction vector
@@ -802,6 +885,7 @@ function normalizeDirection() {
 function draw() {
   // 1) Update knob state first
   updateKnobsForCurrentMode();
+  commitNativeBottomKnobsToHost();
 
   speed = knobSpeed.value;
   noiseScale = knobNoise.value;
@@ -1013,6 +1097,12 @@ function pushLatentToHost(radiusValue, latentValues, scaleValues, biasValues) {
   params.set("mode", mode);
   params.set("seq", String(hostStreamSeq));
   params.set("radius", radiusValue.toFixed(6));
+  params.set("fspeed", knobSpeed.value.toFixed(6));
+  params.set("fnoise", knobNoise.value.toFixed(6));
+  params.set("fcurve", knobCurve.value.toFixed(6));
+  params.set("fgain", knobFlowGain.value.toFixed(6));
+  params.set("fcontrast", knobContrast.value.toFixed(6));
+  params.set("fintensity", knobIntensity.value.toFixed(6));
 
   for (let i = 0; i < LATENT_DIM; i++) {
     if (isGlobalMode) {
@@ -1040,8 +1130,24 @@ function pushLatentToHost(radiusValue, latentValues, scaleValues, biasValues) {
 
 function commitNativeBottomKnobsToHost() {
   if (!HOST_BRIDGE_ENABLED || uiMode !== 1) return;
-  sendHostAction("native_fold_set", { id: "latent_jitter", value: knobLatentNoise.value.toFixed(6) });
-  sendHostAction("native_fold_set", { id: "output_width", value: knobStereoWidth.value.toFixed(6) });
+  const latentJitterValue = knobLatentNoise.value;
+  const stereoWidthValue = knobStereoWidth.value;
+
+  if (Math.abs(latentJitterValue - lastSentLatentJitter) > HOST_PUSH_DEADBAND) {
+    sendHostAction("native_fold_set", {
+      id: "latent_jitter",
+      value: latentJitterValue.toFixed(6)
+    });
+    lastSentLatentJitter = latentJitterValue;
+  }
+
+  if (Math.abs(stereoWidthValue - lastSentStereoWidth) > HOST_PUSH_DEADBAND) {
+    sendHostAction("native_fold_set", {
+      id: "output_width",
+      value: stereoWidthValue.toFixed(6)
+    });
+    lastSentStereoWidth = stereoWidthValue;
+  }
 }
 
 // ==========================
@@ -1198,10 +1304,14 @@ class Knob {
 
   // Utility method
   setValue(v) {
-
-    this.normalized = (v - this.min) / (this.max - this.min);
-    this.normalized = constrain(this.normalized, 0, 1);
-
+    const range = this.max - this.min;
+    let linear = range !== 0 ? (v - this.min) / range : 0;
+    linear = constrain(linear, 0, 1);
+    if (this.taper !== 1.0 && this.taper > 0) {
+      this.normalized = pow(linear, 1.0 / this.taper);
+    } else {
+      this.normalized = linear;
+    }
     this.value = this.computeValue();
   }
 }
