@@ -57,7 +57,6 @@ juce::StringArray getNativeFoldParamIds() {
       rave_parameters::input_thresh, rave_parameters::input_ratio,
       rave_parameters::output_gain,  rave_parameters::output_drywet,
       rave_parameters::output_limit, rave_parameters::latency_mode,
-      rave_parameters::latent_jitter, rave_parameters::output_width,
   };
 }
 
@@ -69,13 +68,6 @@ bool isEmergencyNativeUiEnabled() {
   return std::string(value) == "1" || std::string(value) == "true" ||
          std::string(value) == "TRUE";
 }
-
-const juce::String web_ui_flow_speed{"web_ui_flow_speed"};
-const juce::String web_ui_flow_noise_scale{"web_ui_flow_noise_scale"};
-const juce::String web_ui_flow_curve{"web_ui_flow_curve"};
-const juce::String web_ui_flow_gain{"web_ui_flow_gain"};
-const juce::String web_ui_flow_contrast{"web_ui_flow_contrast"};
-const juce::String web_ui_flow_intensity{"web_ui_flow_intensity"};
 } // namespace
 
 class RaveAPEditor::LatentWebView : public juce::WebBrowserComponent {
@@ -204,6 +196,7 @@ RaveAPEditor::~RaveAPEditor() {
   if (audioProcessor._rave != nullptr) {
     audioProcessor._rave->removeChangeListener(this);
   }
+  audioProcessor.setExternalLatentMode(false);
 }
 
 void RaveAPEditor::importModel() {
@@ -405,20 +398,6 @@ bool RaveAPEditor::writeBundledWebAsset(const String &assetSuffix,
   return outputFile.replaceWithData(data, (size_t)dataSize);
 }
 
-void RaveAPEditor::mirrorWebDebugFile(const String &fileName,
-                                      const String &content) {
-  if (_modelsDirPath == File()) {
-    return;
-  }
-
-  const File debugDir = _modelsDirPath.getChildFile("webui_debug");
-  if (!debugDir.exists()) {
-    debugDir.createDirectory();
-  }
-
-  debugDir.getChildFile(fileName).replaceWithText(content);
-}
-
 void RaveAPEditor::setupLatentWebView() {
   _webUiDir = File::getSpecialLocation(File::tempDirectory)
                   .getChildFile("acids-rave-latent-webui");
@@ -451,7 +430,6 @@ void RaveAPEditor::setupLatentWebView() {
   _modelExplorer.setVisible(false);
   writeWebModelListScript("");
   writeWebNativeFoldParamsScript("");
-  writeWebLatentStateScript("");
 
   if (canLoadUnpackedPage) {
     URL webUiUrl(_webUiDir.getChildFile("index.html"));
@@ -576,73 +554,6 @@ void RaveAPEditor::writeWebNativeFoldParamsScript(const String &requestId) {
       "window.__hostNativeFoldParamsVersion = " +
       String(Time::getMillisecondCounterHiRes()) + ";\n";
   _webUiDir.getChildFile("host_native_fold_params.js").replaceWithText(script);
-  mirrorWebDebugFile("host_native_fold_params.js", script);
-}
-
-void RaveAPEditor::writeWebLatentStateScript(const String &requestId) {
-  if (_webUiDir == File()) {
-    return;
-  }
-
-  juce::Array<juce::var> latentScale;
-  juce::Array<juce::var> latentBias;
-  juce::Array<juce::var> externalLatent;
-  for (size_t i = 0; i < AVAILABLE_DIMS; ++i) {
-    latentScale.add(audioProcessor.getLatentScaleValue(i));
-    latentBias.add(audioProcessor.getLatentBiasValue(i));
-    externalLatent.add(audioProcessor.getExternalLatentValue(i));
-  }
-
-  auto *payload = new DynamicObject();
-  payload->setProperty("req", requestId);
-  payload->setProperty("mode",
-                       audioProcessor.getExternalLatentMode() ? "global"
-                                                              : "native");
-  payload->setProperty("scale", juce::var(latentScale));
-  payload->setProperty("bias", juce::var(latentBias));
-  payload->setProperty("latent", juce::var(externalLatent));
-  payload->setProperty("flowSpeed",
-                       readWebUiFloatProperty(web_ui_flow_speed, 5.0f));
-  payload->setProperty(
-      "flowNoiseScale",
-      readWebUiFloatProperty(web_ui_flow_noise_scale, 0.0255f));
-  payload->setProperty("flowCurve",
-                       readWebUiFloatProperty(web_ui_flow_curve, 2.25f));
-  payload->setProperty("flowGain",
-                       readWebUiFloatProperty(web_ui_flow_gain, 0.155f));
-  payload->setProperty("flowContrast",
-                       readWebUiFloatProperty(web_ui_flow_contrast, 0.475f));
-  payload->setProperty("flowIntensity",
-                       readWebUiFloatProperty(web_ui_flow_intensity, 0.65f));
-  if (auto *latentJitterRaw =
-          _avts.getRawParameterValue(rave_parameters::latent_jitter)) {
-    payload->setProperty("latentJitter", latentJitterRaw->load());
-  }
-  if (auto *outputWidthRaw =
-          _avts.getRawParameterValue(rave_parameters::output_width)) {
-    payload->setProperty("stereoWidth", outputWidthRaw->load());
-  }
-
-  const String json = JSON::toString(juce::var(payload));
-  const String script =
-      "window.__hostLatentState = " + json + ";\n"
-      "window.__hostLatentStateVersion = " +
-      String(Time::getMillisecondCounterHiRes()) + ";\n";
-  _webUiDir.getChildFile("host_latent_state.js").replaceWithText(script);
-  mirrorWebDebugFile("host_latent_state.js", script);
-}
-
-void RaveAPEditor::persistWebUiFloatProperty(const String &propertyName,
-                                             float value) {
-  _avts.state.setProperty(propertyName, value, nullptr);
-}
-
-float RaveAPEditor::readWebUiFloatProperty(const String &propertyName,
-                                           float defaultValue) const {
-  if (_avts.state.hasProperty(propertyName)) {
-    return static_cast<float>(_avts.state.getProperty(propertyName));
-  }
-  return defaultValue;
 }
 
 void RaveAPEditor::handleWebViewUrl(const String &urlString) {
@@ -789,7 +700,6 @@ void RaveAPEditor::handleWebViewUrl(const String &urlString) {
   }
   if (action.equalsIgnoreCase("native_fold_get")) {
     writeWebNativeFoldParamsScript(requestId);
-    writeWebLatentStateScript(requestId);
     return;
   }
   if (action.equalsIgnoreCase("native_fold_set")) {
@@ -806,7 +716,6 @@ void RaveAPEditor::handleWebViewUrl(const String &urlString) {
       }
     }
     writeWebNativeFoldParamsScript(requestId);
-    writeWebLatentStateScript(requestId);
     return;
   }
 
@@ -858,35 +767,6 @@ void RaveAPEditor::handleWebViewUrl(const String &urlString) {
     }
   }
 
-  const String rawFlowSpeed = getUrlParameterValue(url, "fspeed");
-  const String rawFlowNoiseScale = getUrlParameterValue(url, "fnoise");
-  const String rawFlowCurve = getUrlParameterValue(url, "fcurve");
-  const String rawFlowGain = getUrlParameterValue(url, "fgain");
-  const String rawFlowContrast = getUrlParameterValue(url, "fcontrast");
-  const String rawFlowIntensity = getUrlParameterValue(url, "fintensity");
-
-  if (rawFlowSpeed.isNotEmpty()) {
-    persistWebUiFloatProperty(web_ui_flow_speed, rawFlowSpeed.getFloatValue());
-  }
-  if (rawFlowNoiseScale.isNotEmpty()) {
-    persistWebUiFloatProperty(web_ui_flow_noise_scale,
-                              rawFlowNoiseScale.getFloatValue());
-  }
-  if (rawFlowCurve.isNotEmpty()) {
-    persistWebUiFloatProperty(web_ui_flow_curve, rawFlowCurve.getFloatValue());
-  }
-  if (rawFlowGain.isNotEmpty()) {
-    persistWebUiFloatProperty(web_ui_flow_gain, rawFlowGain.getFloatValue());
-  }
-  if (rawFlowContrast.isNotEmpty()) {
-    persistWebUiFloatProperty(web_ui_flow_contrast,
-                              rawFlowContrast.getFloatValue());
-  }
-  if (rawFlowIntensity.isNotEmpty()) {
-    persistWebUiFloatProperty(web_ui_flow_intensity,
-                              rawFlowIntensity.getFloatValue());
-  }
-
   for (size_t i = 0; i < AVAILABLE_DIMS; ++i) {
     const String scaleName = "s" + String((int)i);
     const String biasName = "b" + String((int)i);
@@ -912,6 +792,4 @@ void RaveAPEditor::handleWebViewUrl(const String &urlString) {
       audioProcessor.setExternalLatentValue(i, rawLegacyLatent.getFloatValue());
     }
   }
-
-  writeWebLatentStateScript(requestId);
 }

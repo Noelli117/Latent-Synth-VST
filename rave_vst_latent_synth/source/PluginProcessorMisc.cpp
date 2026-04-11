@@ -71,7 +71,6 @@ void RaveAP::setStateInformation(const void *data, int sizeInBytes) {
   if (xmlState.get() != nullptr)
     if (xmlState->hasTagName(_avts.state.getType()))
       _avts.replaceState(ValueTree::fromXml(*xmlState));
-  restorePersistentLatentState();
 }
 
 void RaveAP::mute() { _fadeScheduler.store(muting::mute); }

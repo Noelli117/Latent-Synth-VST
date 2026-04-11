@@ -4,19 +4,6 @@ set(torch_lib_name torch)
 
 set(torch_dir ${CMAKE_CURRENT_BINARY_DIR}/torch)
 set(torch_lib_name torch)
-set(LATENT_SYNTH_TORCH_DIR "" CACHE PATH "Path to an existing libtorch root directory")
-
-if (LATENT_SYNTH_TORCH_DIR)
-  if (EXISTS "${LATENT_SYNTH_TORCH_DIR}/lib/libtorch.dylib" OR
-      EXISTS "${LATENT_SYNTH_TORCH_DIR}/lib/libtorch.so" OR
-      EXISTS "${LATENT_SYNTH_TORCH_DIR}/share/cmake/Torch/TorchConfig.cmake")
-    set(torch_dir "${LATENT_SYNTH_TORCH_DIR}/..")
-  else()
-    message(FATAL_ERROR
-      "LATENT_SYNTH_TORCH_DIR must point to the libtorch root directory containing lib/ and share/cmake/Torch")
-  endif()
-endif()
-
 find_library(torch_lib
   NAMES ${torch_lib_name}
   PATHS ${torch_dir}/libtorch/lib
