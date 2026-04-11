@@ -45,6 +45,7 @@ RaveAP::RaveAP()
   for (size_t i = 0; i < AVAILABLE_DIMS; ++i) {
     _externalLatentValues[i].store(0.0f);
   }
+  restorePersistentLatentState();
 
   _avts.addParameterListener(rave_parameters::input_gain, this);
   _avts.addParameterListener(rave_parameters::input_thresh, this);
@@ -169,6 +170,7 @@ AudioProcessorValueTreeState::ParameterLayout RaveAP::createParameterLayout() {
 
 void RaveAP::setExternalLatentMode(bool enabled) {
   _externalLatentMode.store(enabled);
+  persistExternalLatentMode();
 }
 
 bool RaveAP::getExternalLatentMode() const {
@@ -184,6 +186,7 @@ void RaveAP::setExternalLatentValue(size_t index, float value) {
     return;
   }
   _externalLatentValues[index].store(value);
+  persistExternalLatentValue(index);
 }
 
 float RaveAP::getExternalLatentValue(size_t index) const {
@@ -200,7 +203,9 @@ void RaveAP::setLatentScaleValue(size_t index, float value) {
   const float clamped =
       juce::jlimit(rave_ranges::latentScaleRange.start,
                    rave_ranges::latentScaleRange.end, value);
-  (*_latentScale)[index]->store(clamped);
+  setParameterValueNotifyingHost(
+      rave_parameters::latent_scale + String("_") + std::to_string(index),
+      clamped);
 }
 
 void RaveAP::setLatentBiasValue(size_t index, float value) {
@@ -210,7 +215,64 @@ void RaveAP::setLatentBiasValue(size_t index, float value) {
   const float clamped =
       juce::jlimit(rave_ranges::latentBiasRange.start,
                    rave_ranges::latentBiasRange.end, value);
-  (*_latentBias)[index]->store(clamped);
+  setParameterValueNotifyingHost(
+      rave_parameters::latent_bias + String("_") + std::to_string(index),
+      clamped);
+}
+
+float RaveAP::getLatentScaleValue(size_t index) const {
+  if (index >= AVAILABLE_DIMS || _latentScale == nullptr) {
+    return 1.0f;
+  }
+  return (*_latentScale)[index]->load();
+}
+
+float RaveAP::getLatentBiasValue(size_t index) const {
+  if (index >= AVAILABLE_DIMS || _latentBias == nullptr) {
+    return 0.0f;
+  }
+  return (*_latentBias)[index]->load();
+}
+
+void RaveAP::persistExternalLatentMode() {
+  _avts.state.setProperty(rave_parameters::external_latent_mode,
+                          _externalLatentMode.load(), nullptr);
+}
+
+void RaveAP::persistExternalLatentValue(size_t index) {
+  if (index >= AVAILABLE_DIMS) {
+    return;
+  }
+  _avts.state.setProperty(rave_parameters::external_latent_value +
+                              String("_") + std::to_string(index),
+                          _externalLatentValues[index].load(), nullptr);
+}
+
+void RaveAP::restorePersistentLatentState() {
+  if (_avts.state.hasProperty(rave_parameters::external_latent_mode)) {
+    _externalLatentMode.store(static_cast<bool>(
+        _avts.state.getProperty(rave_parameters::external_latent_mode)));
+  }
+
+  for (size_t i = 0; i < AVAILABLE_DIMS; ++i) {
+    const auto propertyName =
+        rave_parameters::external_latent_value + String("_") + std::to_string(i);
+    if (_avts.state.hasProperty(propertyName)) {
+      _externalLatentValues[i].store(
+          static_cast<float>(_avts.state.getProperty(propertyName)));
+    }
+  }
+}
+
+void RaveAP::setParameterValueNotifyingHost(const juce::String &parameterID,
+                                            float value) {
+  if (auto *param = _avts.getParameter(parameterID)) {
+    const auto range = param->getNormalisableRange();
+    const float clamped = juce::jlimit(range.start, range.end, value);
+    param->beginChangeGesture();
+    param->setValueNotifyingHost(range.convertTo0to1(clamped));
+    param->endChangeGesture();
+  }
 }
 
 juce::AudioProcessor *JUCE_CALLTYPE createPluginFilter() {

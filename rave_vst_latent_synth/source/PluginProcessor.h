@@ -16,6 +16,8 @@ const juce::StringArray channel_modes = {"L", "R", "L + R"};
 
 namespace rave_parameters {
 const String model_selection{"model_selection"};
+const String external_latent_mode{"external_latent_mode"};
+const String external_latent_value{"external_latent_value"};
 const String input_gain{"input_gain"};
 const String channel_mode{"channel_mode"};
 const String input_thresh{"input_threshold"};
@@ -116,8 +118,15 @@ public:
   float getExternalLatentValue(size_t index) const;
   void setLatentScaleValue(size_t index, float value);
   void setLatentBiasValue(size_t index, float value);
+  float getLatentScaleValue(size_t index) const;
+  float getLatentBiasValue(size_t index) const;
 
 private:
+  void persistExternalLatentMode();
+  void persistExternalLatentValue(size_t index);
+  void restorePersistentLatentState();
+  void setParameterValueNotifyingHost(const juce::String &parameterID,
+                                      float value);
   mutable CriticalSection _engineUpdateMutex;
   juce::AudioProcessorValueTreeState _avts;
   std::unique_ptr<juce::ThreadPool> _engineThreadPool;
