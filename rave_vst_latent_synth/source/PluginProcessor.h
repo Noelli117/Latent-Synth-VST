@@ -2,6 +2,7 @@
 
 #include "CircularBuffer.h"
 #include "EngineUpdater.h"
+#include "LatentFlowController.h"
 #include "Rave.h"
 #include <JuceHeader.h>
 #include <algorithm>
@@ -32,6 +33,12 @@ const String latent_bias{"latent_bias"};
 const String latency_mode{"latency_mode"};
 const String use_prior{"use_prior"};
 const String prior_temperature{"prior_temperature"};
+const String flow_speed{"flow_speed"};
+const String flow_noise_scale{"flow_noise_scale"};
+const String flow_curve{"flow_curve"};
+const String flow_gain{"flow_gain"};
+const String flow_contrast{"flow_contrast"};
+const String flow_intensity{"flow_intensity"};
 } // namespace rave_parameters
 
 namespace rave_ranges {
@@ -120,11 +127,27 @@ public:
   void setLatentBiasValue(size_t index, float value);
   float getLatentScaleValue(size_t index) const;
   float getLatentBiasValue(size_t index) const;
+  void setWebUiFlowSpeed(float value);
+  void setWebUiFlowNoiseScale(float value);
+  void setWebUiFlowCurve(float value);
+  void setWebUiFlowGain(float value);
+  void setWebUiFlowContrast(float value);
+  void setWebUiFlowIntensity(float value);
+  float getWebUiFlowSpeed() const;
+  float getWebUiFlowNoiseScale() const;
+  float getWebUiFlowCurve() const;
+  float getWebUiFlowGain() const;
+  float getWebUiFlowContrast() const;
+  float getWebUiFlowIntensity() const;
+  float getWebUiFlowRadius() const;
 
 private:
   void persistExternalLatentMode();
   void persistExternalLatentValue(size_t index);
+  void persistWebUiFlowState(const juce::String &propertyName, float value);
   void restorePersistentLatentState();
+  void updateRuntimeExternalLatentValues(
+      const std::array<float, AVAILABLE_DIMS> &values);
   void setParameterValueNotifyingHost(const juce::String &parameterID,
                                       float value);
   mutable CriticalSection _engineUpdateMutex;
@@ -166,6 +189,14 @@ private:
   std::array<std::atomic<float> *, AVAILABLE_DIMS> *_latentBias;
   std::atomic<bool> _externalLatentMode{false};
   std::array<std::atomic<float>, AVAILABLE_DIMS> _externalLatentValues;
+  LatentFlowController _latentFlowController;
+  std::atomic<float> _webUiFlowSpeed{5.0f};
+  std::atomic<float> _webUiFlowNoiseScale{0.0255f};
+  std::atomic<float> _webUiFlowCurve{2.25f};
+  std::atomic<float> _webUiFlowGain{0.155f};
+  std::atomic<float> _webUiFlowContrast{0.475f};
+  std::atomic<float> _webUiFlowIntensity{0.65f};
+  std::atomic<float> _webUiFlowRadius{0.0f};
   std::atomic<bool> _isMuted{true};
   std::atomic<bool> _isShuttingDown{false};
 

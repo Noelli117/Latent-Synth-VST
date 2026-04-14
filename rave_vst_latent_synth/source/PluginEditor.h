@@ -45,9 +45,6 @@ private:
   void writeWebNativeFoldParamsScript(const String &requestId);
   void writeWebLatentStateScript(const String &requestId);
   void mirrorWebDebugFile(const String &fileName, const String &content);
-  void persistWebUiFloatProperty(const String &propertyName, float value);
-  float readWebUiFloatProperty(const String &propertyName,
-                               float defaultValue) const;
   void setModelExplorerVisible(bool showExplorer);
   bool writeBundledWebAsset(const String &assetSuffix,
                             const String &outputFileName);

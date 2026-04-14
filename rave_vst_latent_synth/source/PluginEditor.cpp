@@ -70,12 +70,6 @@ bool isEmergencyNativeUiEnabled() {
          std::string(value) == "TRUE";
 }
 
-const juce::String web_ui_flow_speed{"web_ui_flow_speed"};
-const juce::String web_ui_flow_noise_scale{"web_ui_flow_noise_scale"};
-const juce::String web_ui_flow_curve{"web_ui_flow_curve"};
-const juce::String web_ui_flow_gain{"web_ui_flow_gain"};
-const juce::String web_ui_flow_contrast{"web_ui_flow_contrast"};
-const juce::String web_ui_flow_intensity{"web_ui_flow_intensity"};
 } // namespace
 
 class RaveAPEditor::LatentWebView : public juce::WebBrowserComponent {
@@ -601,19 +595,13 @@ void RaveAPEditor::writeWebLatentStateScript(const String &requestId) {
   payload->setProperty("scale", juce::var(latentScale));
   payload->setProperty("bias", juce::var(latentBias));
   payload->setProperty("latent", juce::var(externalLatent));
-  payload->setProperty("flowSpeed",
-                       readWebUiFloatProperty(web_ui_flow_speed, 5.0f));
-  payload->setProperty(
-      "flowNoiseScale",
-      readWebUiFloatProperty(web_ui_flow_noise_scale, 0.0255f));
-  payload->setProperty("flowCurve",
-                       readWebUiFloatProperty(web_ui_flow_curve, 2.25f));
-  payload->setProperty("flowGain",
-                       readWebUiFloatProperty(web_ui_flow_gain, 0.155f));
-  payload->setProperty("flowContrast",
-                       readWebUiFloatProperty(web_ui_flow_contrast, 0.475f));
-  payload->setProperty("flowIntensity",
-                       readWebUiFloatProperty(web_ui_flow_intensity, 0.65f));
+  payload->setProperty("flowSpeed", audioProcessor.getWebUiFlowSpeed());
+  payload->setProperty("flowNoiseScale", audioProcessor.getWebUiFlowNoiseScale());
+  payload->setProperty("flowCurve", audioProcessor.getWebUiFlowCurve());
+  payload->setProperty("flowGain", audioProcessor.getWebUiFlowGain());
+  payload->setProperty("flowContrast", audioProcessor.getWebUiFlowContrast());
+  payload->setProperty("flowIntensity", audioProcessor.getWebUiFlowIntensity());
+  payload->setProperty("flowRadius", audioProcessor.getWebUiFlowRadius());
   if (auto *latentJitterRaw =
           _avts.getRawParameterValue(rave_parameters::latent_jitter)) {
     payload->setProperty("latentJitter", latentJitterRaw->load());
@@ -632,19 +620,6 @@ void RaveAPEditor::writeWebLatentStateScript(const String &requestId) {
   mirrorWebDebugFile("host_latent_state.js", script);
 }
 
-void RaveAPEditor::persistWebUiFloatProperty(const String &propertyName,
-                                             float value) {
-  _avts.state.setProperty(propertyName, value, nullptr);
-}
-
-float RaveAPEditor::readWebUiFloatProperty(const String &propertyName,
-                                           float defaultValue) const {
-  if (_avts.state.hasProperty(propertyName)) {
-    return static_cast<float>(_avts.state.getProperty(propertyName));
-  }
-  return defaultValue;
-}
-
 void RaveAPEditor::handleWebViewUrl(const String &urlString) {
   static const bool verboseBridgeLogs = []() {
     const char *value = std::getenv("LATENT_SYNTH_WEB_BRIDGE_LOG");
@@ -654,8 +629,6 @@ void RaveAPEditor::handleWebViewUrl(const String &urlString) {
     const std::string raw(value);
     return raw == "1" || raw == "true" || raw == "TRUE";
   }();
-  static String lastDebugMode;
-  static int debugStreamCount = 0;
 
   const auto logBridge = [](const String &message) {
     juce::Logger::writeToLog(message);
@@ -840,24 +813,6 @@ void RaveAPEditor::handleWebViewUrl(const String &urlString) {
     audioProcessor.setExternalLatentMode(useGlobalLatent);
   }
 
-  if (verboseBridgeLogs) {
-    const String dbgG0 = getUrlParameterValue(url, "g0");
-    const String dbgS0 = getUrlParameterValue(url, "s0");
-    const String dbgB0 = getUrlParameterValue(url, "b0");
-    const bool modeChanged = mode != lastDebugMode;
-    ++debugStreamCount;
-    if (modeChanged || (debugStreamCount % 20 == 0)) {
-      const String dbgMessage =
-          "[latent_synth_v3][web_bridge][latent_stream_dbg] mode=" + mode +
-                " externalMode=" +
-                String(audioProcessor.getExternalLatentMode() ? 1 : 0) +
-                " g0=" + dbgG0 + " s0=" + dbgS0 + " b0=" + dbgB0 +
-                " seq=" + seqRaw;
-      logBridge(dbgMessage);
-      lastDebugMode = mode;
-    }
-  }
-
   const String rawFlowSpeed = getUrlParameterValue(url, "fspeed");
   const String rawFlowNoiseScale = getUrlParameterValue(url, "fnoise");
   const String rawFlowCurve = getUrlParameterValue(url, "fcurve");
@@ -866,50 +821,36 @@ void RaveAPEditor::handleWebViewUrl(const String &urlString) {
   const String rawFlowIntensity = getUrlParameterValue(url, "fintensity");
 
   if (rawFlowSpeed.isNotEmpty()) {
-    persistWebUiFloatProperty(web_ui_flow_speed, rawFlowSpeed.getFloatValue());
+    audioProcessor.setWebUiFlowSpeed(rawFlowSpeed.getFloatValue());
   }
   if (rawFlowNoiseScale.isNotEmpty()) {
-    persistWebUiFloatProperty(web_ui_flow_noise_scale,
-                              rawFlowNoiseScale.getFloatValue());
+    audioProcessor.setWebUiFlowNoiseScale(rawFlowNoiseScale.getFloatValue());
   }
   if (rawFlowCurve.isNotEmpty()) {
-    persistWebUiFloatProperty(web_ui_flow_curve, rawFlowCurve.getFloatValue());
+    audioProcessor.setWebUiFlowCurve(rawFlowCurve.getFloatValue());
   }
   if (rawFlowGain.isNotEmpty()) {
-    persistWebUiFloatProperty(web_ui_flow_gain, rawFlowGain.getFloatValue());
+    audioProcessor.setWebUiFlowGain(rawFlowGain.getFloatValue());
   }
   if (rawFlowContrast.isNotEmpty()) {
-    persistWebUiFloatProperty(web_ui_flow_contrast,
-                              rawFlowContrast.getFloatValue());
+    audioProcessor.setWebUiFlowContrast(rawFlowContrast.getFloatValue());
   }
   if (rawFlowIntensity.isNotEmpty()) {
-    persistWebUiFloatProperty(web_ui_flow_intensity,
-                              rawFlowIntensity.getFloatValue());
+    audioProcessor.setWebUiFlowIntensity(rawFlowIntensity.getFloatValue());
   }
 
   for (size_t i = 0; i < AVAILABLE_DIMS; ++i) {
     const String scaleName = "s" + String((int)i);
     const String biasName = "b" + String((int)i);
-    const String globalName = "g" + String((int)i);
-    const String legacyLatentName = "z" + String((int)i);
 
     const String rawScale = getUrlParameterValue(url, scaleName);
     const String rawBias = getUrlParameterValue(url, biasName);
-    const String rawGlobal = getUrlParameterValue(url, globalName);
-    const String rawLegacyLatent = getUrlParameterValue(url, legacyLatentName);
 
     if (rawScale.isNotEmpty()) {
       audioProcessor.setLatentScaleValue(i, rawScale.getFloatValue());
     }
     if (rawBias.isNotEmpty()) {
       audioProcessor.setLatentBiasValue(i, rawBias.getFloatValue());
-    }
-
-    if (useGlobalLatent && rawGlobal.isNotEmpty()) {
-      audioProcessor.setExternalLatentValue(i, rawGlobal.getFloatValue());
-    } else if (useGlobalLatent && rawLegacyLatent.isNotEmpty()) {
-      // Backward compatibility with earlier "zN" payloads.
-      audioProcessor.setExternalLatentValue(i, rawLegacyLatent.getFloatValue());
     }
   }
 

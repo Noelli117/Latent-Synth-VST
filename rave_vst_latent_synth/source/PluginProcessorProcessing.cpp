@@ -59,6 +59,23 @@ void RaveAP::modelPerform() {
 
     // Latent modifications
     const bool useExternalLatent = _externalLatentMode.load();
+    if (useExternalLatent) {
+      LatentFlowController::Params flowParams;
+      flowParams.speed = _webUiFlowSpeed.load();
+      flowParams.noiseScale = _webUiFlowNoiseScale.load();
+      flowParams.curve = _webUiFlowCurve.load();
+      flowParams.gain = _webUiFlowGain.load();
+      flowParams.contrast = _webUiFlowContrast.load();
+      flowParams.intensity = _webUiFlowIntensity.load();
+      _latentFlowController.setParams(flowParams);
+      const float stepDt =
+          (_sampleRate > 0.0) ? ((float)input_size / (float)_sampleRate)
+                              : (1.0f / 60.0f);
+      _latentFlowController.step(stepDt);
+      const auto &flowLatent = _latentFlowController.getLatent();
+      updateRuntimeExternalLatentValues(flowLatent);
+      _webUiFlowRadius.store(_latentFlowController.getRadius());
+    }
     int64_t n_dimensions =
         std::min((int)latent_traj.size(1), (int)AVAILABLE_DIMS);
 
@@ -148,6 +165,14 @@ void RaveAP::modelPerform() {
     const int outIndexR = (out.sizes()[1] > 1 ? 1 : 0);
     at::Tensor outL = out.index({0, 0, at::indexing::Slice()});
     at::Tensor outR = out.index({0, outIndexR, at::indexing::Slice()});
+
+    if (outIndexR != 0) {
+      const float width = juce::jlimit(0.0f, 2.0f, _widthValue->load() / 100.f);
+      const at::Tensor mid = 0.5f * (outL + outR);
+      const at::Tensor side = 0.5f * (outL - outR) * width;
+      outL = mid + side;
+      outR = mid - side;
+    }
 
 #if DEBUG_PERFORM
     std::cout << "latent decoded" << std::endl;

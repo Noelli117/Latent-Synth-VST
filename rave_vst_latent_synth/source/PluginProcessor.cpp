@@ -82,6 +82,8 @@ void RaveAP::prepareToPlay(double sampleRate, int samplesPerBlock) {
   _inBuffer[0].initialize(BUFFER_LENGTH);
   _outBuffer[0].initialize(BUFFER_LENGTH);
   _outBuffer[1].initialize(BUFFER_LENGTH);
+  _latentFlowController.reset();
+  _webUiFlowRadius.store(0.0f);
   _smoothedFadeInOut.reset(sampleRate, 0.2);
   juce::dsp::ProcessSpec specs = {
       sampleRate, static_cast<juce::uint32>(samplesPerBlock), 2};
@@ -96,7 +98,10 @@ void RaveAP::prepareToPlay(double sampleRate, int samplesPerBlock) {
   _compressorEffect.setThreshold(_thresholdValue->load());
   _outputGainEffect.setGainDecibels(_outputGainValue->load());
   _dryWetMixerEffect.setWetMixProportion(_dryWetValue->load() / 100.f);
-  setLatencySamples(pow(2, *_latencyMode));
+  const auto initialLatencySamples =
+      static_cast<int>(pow(2, *_latencyMode));
+  _dryWetMixerEffect.setWetLatency(initialLatencySamples);
+  setLatencySamples(initialLatencySamples);
 }
 
 void RaveAP::releaseResources() {
@@ -234,6 +239,62 @@ float RaveAP::getLatentBiasValue(size_t index) const {
   return (*_latentBias)[index]->load();
 }
 
+void RaveAP::setWebUiFlowSpeed(float value) {
+  const float clamped = juce::jlimit(0.0f, 10.0f, value);
+  _webUiFlowSpeed.store(clamped);
+  persistWebUiFlowState(rave_parameters::flow_speed, clamped);
+}
+
+void RaveAP::setWebUiFlowNoiseScale(float value) {
+  const float clamped = juce::jlimit(0.001f, 0.05f, value);
+  _webUiFlowNoiseScale.store(clamped);
+  persistWebUiFlowState(rave_parameters::flow_noise_scale, clamped);
+}
+
+void RaveAP::setWebUiFlowCurve(float value) {
+  const float clamped = juce::jlimit(0.5f, 4.0f, value);
+  _webUiFlowCurve.store(clamped);
+  persistWebUiFlowState(rave_parameters::flow_curve, clamped);
+}
+
+void RaveAP::setWebUiFlowGain(float value) {
+  const float clamped = juce::jlimit(0.01f, 0.3f, value);
+  _webUiFlowGain.store(clamped);
+  persistWebUiFlowState(rave_parameters::flow_gain, clamped);
+}
+
+void RaveAP::setWebUiFlowContrast(float value) {
+  const float clamped = juce::jlimit(0.0f, 0.95f, value);
+  _webUiFlowContrast.store(clamped);
+  persistWebUiFlowState(rave_parameters::flow_contrast, clamped);
+}
+
+void RaveAP::setWebUiFlowIntensity(float value) {
+  const float clamped = juce::jlimit(0.3f, 1.0f, value);
+  _webUiFlowIntensity.store(clamped);
+  persistWebUiFlowState(rave_parameters::flow_intensity, clamped);
+}
+
+float RaveAP::getWebUiFlowSpeed() const { return _webUiFlowSpeed.load(); }
+
+float RaveAP::getWebUiFlowNoiseScale() const {
+  return _webUiFlowNoiseScale.load();
+}
+
+float RaveAP::getWebUiFlowCurve() const { return _webUiFlowCurve.load(); }
+
+float RaveAP::getWebUiFlowGain() const { return _webUiFlowGain.load(); }
+
+float RaveAP::getWebUiFlowContrast() const {
+  return _webUiFlowContrast.load();
+}
+
+float RaveAP::getWebUiFlowIntensity() const {
+  return _webUiFlowIntensity.load();
+}
+
+float RaveAP::getWebUiFlowRadius() const { return _webUiFlowRadius.load(); }
+
 void RaveAP::persistExternalLatentMode() {
   _avts.state.setProperty(rave_parameters::external_latent_mode,
                           _externalLatentMode.load(), nullptr);
@@ -246,6 +307,11 @@ void RaveAP::persistExternalLatentValue(size_t index) {
   _avts.state.setProperty(rave_parameters::external_latent_value +
                               String("_") + std::to_string(index),
                           _externalLatentValues[index].load(), nullptr);
+}
+
+void RaveAP::persistWebUiFlowState(const juce::String &propertyName,
+                                   float value) {
+  _avts.state.setProperty(propertyName, value, nullptr);
 }
 
 void RaveAP::restorePersistentLatentState() {
@@ -261,6 +327,38 @@ void RaveAP::restorePersistentLatentState() {
       _externalLatentValues[i].store(
           static_cast<float>(_avts.state.getProperty(propertyName)));
     }
+  }
+
+  if (_avts.state.hasProperty(rave_parameters::flow_speed)) {
+    _webUiFlowSpeed.store(
+        (float)_avts.state.getProperty(rave_parameters::flow_speed));
+  }
+  if (_avts.state.hasProperty(rave_parameters::flow_noise_scale)) {
+    _webUiFlowNoiseScale.store(
+        (float)_avts.state.getProperty(rave_parameters::flow_noise_scale));
+  }
+  if (_avts.state.hasProperty(rave_parameters::flow_curve)) {
+    _webUiFlowCurve.store(
+        (float)_avts.state.getProperty(rave_parameters::flow_curve));
+  }
+  if (_avts.state.hasProperty(rave_parameters::flow_gain)) {
+    _webUiFlowGain.store(
+        (float)_avts.state.getProperty(rave_parameters::flow_gain));
+  }
+  if (_avts.state.hasProperty(rave_parameters::flow_contrast)) {
+    _webUiFlowContrast.store(
+        (float)_avts.state.getProperty(rave_parameters::flow_contrast));
+  }
+  if (_avts.state.hasProperty(rave_parameters::flow_intensity)) {
+    _webUiFlowIntensity.store(
+        (float)_avts.state.getProperty(rave_parameters::flow_intensity));
+  }
+}
+
+void RaveAP::updateRuntimeExternalLatentValues(
+    const std::array<float, AVAILABLE_DIMS> &values) {
+  for (size_t i = 0; i < AVAILABLE_DIMS; ++i) {
+    _externalLatentValues[i].store(values[i]);
   }
 }
 

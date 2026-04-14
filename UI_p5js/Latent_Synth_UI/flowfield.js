@@ -1,4 +1,5 @@
 let uiMode = 0;
+const LATENT_WEB_UI_VERSION = "2026-04-13-runtime-flow-fix-v3";
 let modebutton;
 let explorerButton;
 let explorerOpen = false;
@@ -31,17 +32,13 @@ const FORCED_NAV_ACTIONS = new Set([
   "download_model",
 ]);
 let hostStreamSeq = 1;
-let lastHostPushMs = 0;
 let lastSentMode = "";
-let lastSentRadius = NaN;
-let lastSentGlobal = new Array(LATENT_DIM).fill(NaN);
 let lastSentScale = new Array(LATENT_DIM).fill(NaN);
 let lastSentBias = new Array(LATENT_DIM).fill(NaN);
 let lastSentLatentJitter = NaN;
 let lastSentStereoWidth = NaN;
-
-let radius = 0;
-
+let hostLatentStateHydrated = false;
+let nativeFoldParamsHydrated = false;
 
 let scale = new Array(LATENT_DIM).fill(1);
 let bias = new Array(LATENT_DIM).fill(0);
@@ -59,20 +56,8 @@ let intensity = 0.3; // Controls latent responsiveness and liveliness
 
 const pi = Math.PI;
 const EPSILON = 0.000001; // Prevent division by zero
-const LATENT_RADIUS_MIN = 0.05;
-const LATENT_RADIUS_MAX = 8.0;
-const LATENT_NOISE_MAX = 4.0;
-const TEMPORAL_JITTER_ONSET = 0.6;
 const PARTICLE_STROKE_ALPHA = 190;
 const TRAIL_DEFOG_ALPHA = 10;
-
-
-// 8D latent state
-let latent = new Array(LATENT_DIM).fill(0);
-let latentDirection = new Array(LATENT_DIM).fill(0);
-let latentNoiseState = new Array(LATENT_DIM).fill(0);
-let directionUnit = new Array(LATENT_DIM).fill(0);
-let targetLatent = new Array(LATENT_DIM).fill(0);
 
 // Flow Field mode knobs
 let knobSpeed;
@@ -183,10 +168,10 @@ function applyHostLatentState(data) {
 
   const mode = data.mode === "global" ? 0 : 1;
   uiMode = mode;
+  hostLatentStateHydrated = true;
 
   const scaleValues = Array.isArray(data.scale) ? data.scale : [];
   const biasValues = Array.isArray(data.bias) ? data.bias : [];
-  const latentValues = Array.isArray(data.latent) ? data.latent : [];
   const flowSpeed = Number.isFinite(Number(data.flowSpeed)) ? Number(data.flowSpeed) : 5;
   const flowNoiseScale = Number.isFinite(Number(data.flowNoiseScale)) ? Number(data.flowNoiseScale) : 0.0255;
   const flowCurve = Number.isFinite(Number(data.flowCurve)) ? Number(data.flowCurve) : 2.25;
@@ -204,6 +189,9 @@ function applyHostLatentState(data) {
   if (knobIntensity) knobIntensity.setValue(flowIntensityValue);
   if (knobLatentNoise) knobLatentNoise.setValue(latentJitterValue);
   if (knobStereoWidth) knobStereoWidth.setValue(stereoWidthValue);
+  lastSentLatentJitter = latentJitterValue;
+  lastSentStereoWidth = stereoWidthValue;
+  lastSentMode = data.mode === "global" ? "global" : "native";
 
   const latentPairs = getLatentKnobPairs();
   for (let i = 0; i < latentPairs.length; i++) {
@@ -213,9 +201,9 @@ function applyHostLatentState(data) {
     latentPairs[i][1].setValue(scaleValue);
     bias[i] = biasValue;
     scale[i] = scaleValue;
-    latent[i] = Number.isFinite(Number(latentValues[i])) ? Number(latentValues[i]) : latent[i];
-    targetLatent[i] = latent[i];
   }
+  copyArrayValues(lastSentScale, scale);
+  copyArrayValues(lastSentBias, bias);
 }
 
 function requestHostLatentState() {
@@ -550,6 +538,7 @@ function addNativeFoldToggle(parent, config) {
 
 function applyNativeFoldParams(params) {
   if (!params) return;
+  nativeFoldParamsHydrated = true;
 
   for (let i = 0; i < nativeFoldControls.length; i++) {
     const c = nativeFoldControls[i];
@@ -569,11 +558,15 @@ function applyNativeFoldParams(params) {
   }
 
   if ("latent_jitter" in params && knobLatentNoise) {
-    knobLatentNoise.setValue(Number(params.latent_jitter));
+    const latentJitterValue = Number(params.latent_jitter);
+    knobLatentNoise.setValue(latentJitterValue);
+    lastSentLatentJitter = latentJitterValue;
   }
 
   if ("output_width" in params && knobStereoWidth) {
-    knobStereoWidth.setValue(Number(params.output_width));
+    const stereoWidthValue = Number(params.output_width);
+    knobStereoWidth.setValue(stereoWidthValue);
+    lastSentStereoWidth = stereoWidthValue;
   }
 
   const fftSize = params.fft_size ? Math.round(Number(params.fft_size)) : 0;
@@ -703,23 +696,6 @@ function updateLatentArraysFromKnobs() {
   }
 }
 
-function getSmoothedRadius(values) {
-  let sumSq = 0;
-  for (let i = 0; i < values.length; i++) {
-    sumSq += values[i] * values[i];
-  }
-  return sqrt(sumSq);
-}
-
-// Box-Muller Gaussian white noise (mean=0, std=1)
-function randn() {
-  let u = 0;
-  let v = 0;
-  while (u === 0) u = Math.random();
-  while (v === 0) v = Math.random();
-  return sqrt(-2.0 * Math.log(u)) * cos(2.0 * pi * v);
-}
-
 function updateKnobsForCurrentMode() {
   if (uiMode === 0) {
     const flowKnobs = getFlowKnobs();
@@ -795,15 +771,6 @@ function setup() {
     particles.push(createVector(random(width), random(height)));
   }
 
-  for (let i = 0; i < LATENT_DIM; i++) {
-    latent[i] = random(-1, 1);
-  }
-  
-  for (let i = 0; i < LATENT_DIM; i++) {
-    latentDirection[i] = random(-1, 1);
-  }
-  normalizeDirection();
-
   stroke(255);
   strokeWeight(3);
 
@@ -868,19 +835,6 @@ function setup() {
 
 }
 
-// Normalize direction vector
-function normalizeDirection() {
-  let mag = 0;
-  for (let i = 0; i < LATENT_DIM; i++) {
-    mag += latentDirection[i] * latentDirection[i];
-  }
-  mag = sqrt(mag) + EPSILON;
-
-  for (let i = 0; i < LATENT_DIM; i++) {
-    latentDirection[i] /= mag;
-  }
-}
-
 
 function draw() {
   // 1) Update knob state first
@@ -905,21 +859,9 @@ function draw() {
 
   // 3) Particle count scales with intensity
   const activeParticles = floor(lerp(BASE_PARTICLES, MAX_PARTICLES, intensity));
-  let S = speed * flowGain;
-  let safeS = Math.max(S, EPSILON);
-  let sx = 1 - contrast;
-  let sy = 1 + contrast;
-  let invNum = 1 / activeParticles;
-
-  // Statistics used for latent generation
-  let sumVX = 0;
-  let sumVY = 0;
-  let sumPX = 0;
-  let sumPY = 0;
-  let sumNoise = 0;
-  let sumCos = 0;
-  let sumSin = 0;
-  let sumDriveMag = 0;
+  const S = speed * flowGain;
+  const sx = 1 - contrast;
+  const sy = 1 + contrast;
   
   // Flow field idea reference:
   // https://www.youtube.com/watch?v=sZBfLgfsvSk
@@ -934,9 +876,6 @@ function draw() {
 
     let tx = cos(a) * sx;
     let ty = sin(a) * sy;
-    const driveMag = sqrt(tx * tx + ty * ty);
-    sumDriveMag += driveMag;
-
     let magnitude = sqrt(tx * tx + ty * ty) + EPSILON;
     let invMagnitude = 1 / magnitude;
 
@@ -946,130 +885,18 @@ function draw() {
     p.x += vx;
     p.y += vy;
 
-    // Velocity stats
-    sumVX += vx;
-    sumVY += vy;
-
-    // Position stats
-    sumPX += p.x;
-    sumPY += p.y;
-
-    // Noise stats
-    sumNoise += n;
-
-    // Direction stats (mean motion direction)
-    sumCos += tx * invMagnitude;
-    sumSin += ty * invMagnitude;
-
     if (p.x < 0 || p.x > width || p.y < 0 || p.y > height) {
       p.x = random(width);
       p.y = random(height);
     }
   }
-
-  // Motion Energy -> Latent Radius:
-  // latent = radius * direction
-  // direction = timbre orientation, radius = energy/intensity.
-
-  let meanVX = sumVX * invNum;
-  let meanVY = sumVY * invNum;
-  const meanDriveMag = sumDriveMag * invNum;
-  const maxDriveMag = Math.max(Math.abs(sx), Math.abs(sy)) + EPSILON;
-  const motionNorm = constrain(meanDriveMag / maxDriveMag, 0, 1);
-  let motionEnergy = motionNorm * safeS;
-
-  // Map motion energy into latent radius range
-  let r_target = map(
-    motionEnergy,
-    0,
-    safeS,
-    LATENT_RADIUS_MIN,
-    LATENT_RADIUS_MAX
-  );
-  r_target = constrain(r_target, LATENT_RADIUS_MIN, LATENT_RADIUS_MAX);
-
-  // Extract 8D directional features from flow stats:
-  // d0/d1: spatial center, d2: noise complexity, d3: dominant motion angle
-  // d4/d5: mean velocity, d6: speed state, d7: curviness state
-
-  let avgX = sumPX * invNum;
-  let avgY = sumPY * invNum;
-  let avgNoise = sumNoise * invNum;
-  let avgAngle = atan2(sumSin * invNum, sumCos * invNum);
-
-  // Build 8D direction features (roughly in [-1, 1])
-  let d = latentDirection;
-
-  d[0] = map(avgX, 0, width, -1, 1);
-  d[1] = map(avgY, 0, height, -1, 1);
-  d[2] = avgNoise * 2 - 1;
-  d[3] = avgAngle / pi;
-
-  d[4] = map(meanVX, -safeS, safeS, -1, 1);
-  d[5] = map(meanVY, -safeS, safeS, -1, 1);
-  d[6] = map(speed, 0, 10, -1, 1);
-  d[7] = map(curviness, 0.5, 4, -1, 1);
-
-  // Normalize direction
-  let norm = 0;
-  for (let i = 0; i < LATENT_DIM; i++) {
-    norm += d[i] * d[i];
-  }
-  norm = sqrt(norm) + EPSILON;
-
-  for (let i = 0; i < LATENT_DIM; i++) {
-    directionUnit[i] = d[i] / norm;
-  }
-
-
-  // Apply radius scaling: latent = normalize(direction) * r_target
-  const isGlobalMode = (uiMode === 0);
-  const temporalJitterMix = constrain(
-    (intensity - TEMPORAL_JITTER_ONSET) / (1.0 - TEMPORAL_JITTER_ONSET),
-    0,
-    1
-  );
-  const motionJitterAmount = intensity * motionNorm * 0.6 * temporalJitterMix;
-  const latentNoiseAmount = intensity * LATENT_NOISE_MAX;
-  const noiseSpeed = lerp(0.03, 0.6, intensity);
-
-  for (let i = 0; i < LATENT_DIM; i++) {
-
-  // Global direction component
-  const global = r_target * directionUnit[i];
-
-  // Dual mode:
-  // global mode uses flow-field latent directly;
-  // native mode applies only local scale/bias.
-  if (isGlobalMode) {
-    targetLatent[i] = global;
-    const temporalJitter = (noise(frameCount * 0.02, i * 31.7) - 0.5) * 2.0;
-    targetLatent[i] += motionJitterAmount * temporalJitter;
-
-    // Gaussian perturbation update speed is tied to intensity:
-    // low intensity is smoother, high intensity changes faster.
-    latentNoiseState[i] = lerp(latentNoiseState[i], randn(), noiseSpeed);
-    targetLatent[i] += latentNoiseAmount * latentNoiseState[i];
-  } else {
-    targetLatent[i] = bias[i];
-  }
-  }
-  // --------------------------------------------
-
-  const alpha = lerp(0.01, 0.25, intensity);
-  for (let i = 0; i < LATENT_DIM; i++) {
-    latent[i] += alpha * (targetLatent[i] - latent[i]);
-  }
-
-  let smoothedRadius = getSmoothedRadius(latent);
-
-  pushLatentToHost(smoothedRadius, latent, scale, bias);
+  pushLatentToHost(scale, bias);
   // 4) Draw knobs
   drawKnobsForCurrentMode();
 
 }
 
-// Push latent state to host
+// Push UI state to host
 function hasArrayDelta(current, previous, deadband) {
   for (let i = 0; i < LATENT_DIM; i++) {
     if (Math.abs(current[i] - previous[i]) > deadband) {
@@ -1085,18 +912,15 @@ function copyArrayValues(destination, source) {
   }
 }
 
-function pushLatentToHost(radiusValue, latentValues, scaleValues, biasValues) {
-  if (!HOST_BRIDGE_ENABLED) return;
+function pushLatentToHost(scaleValues, biasValues) {
+  if (!HOST_BRIDGE_ENABLED || !hostLatentStateHydrated) return;
   const isGlobalMode = (uiMode === 0);
   const mode = isGlobalMode ? "global" : "native";
-  const nowMs = millis();
-  const modeChanged = mode !== lastSentMode;
 
   const params = new URLSearchParams();
   params.set("action", "latent_stream");
   params.set("mode", mode);
   params.set("seq", String(hostStreamSeq));
-  params.set("radius", radiusValue.toFixed(6));
   params.set("fspeed", knobSpeed.value.toFixed(6));
   params.set("fnoise", knobNoise.value.toFixed(6));
   params.set("fcurve", knobCurve.value.toFixed(6));
@@ -1105,9 +929,7 @@ function pushLatentToHost(radiusValue, latentValues, scaleValues, biasValues) {
   params.set("fintensity", knobIntensity.value.toFixed(6));
 
   for (let i = 0; i < LATENT_DIM; i++) {
-    if (isGlobalMode) {
-      params.set(`g${i}`, latentValues[i].toFixed(6));
-    } else {
+    if (!isGlobalMode) {
       params.set(`s${i}`, scaleValues[i].toFixed(6));
       params.set(`b${i}`, biasValues[i].toFixed(6));
     }
@@ -1117,23 +939,20 @@ function pushLatentToHost(radiusValue, latentValues, scaleValues, biasValues) {
   if (!sendBridgeQuery(query)) return;
 
   hostStreamSeq += 1;
-  lastHostPushMs = nowMs;
   lastSentMode = mode;
-  lastSentRadius = radiusValue;
-  if (isGlobalMode) {
-    copyArrayValues(lastSentGlobal, latentValues);
-  } else {
+  if (!isGlobalMode) {
     copyArrayValues(lastSentScale, scaleValues);
     copyArrayValues(lastSentBias, biasValues);
   }
 }
 
 function commitNativeBottomKnobsToHost() {
-  if (!HOST_BRIDGE_ENABLED || uiMode !== 1) return;
+  if (!HOST_BRIDGE_ENABLED || uiMode !== 1 || !nativeFoldParamsHydrated) return;
   const latentJitterValue = knobLatentNoise.value;
   const stereoWidthValue = knobStereoWidth.value;
 
-  if (Math.abs(latentJitterValue - lastSentLatentJitter) > HOST_PUSH_DEADBAND) {
+  if (!Number.isFinite(lastSentLatentJitter) ||
+      Math.abs(latentJitterValue - lastSentLatentJitter) > HOST_PUSH_DEADBAND) {
     sendHostAction("native_fold_set", {
       id: "latent_jitter",
       value: latentJitterValue.toFixed(6)
@@ -1141,7 +960,8 @@ function commitNativeBottomKnobsToHost() {
     lastSentLatentJitter = latentJitterValue;
   }
 
-  if (Math.abs(stereoWidthValue - lastSentStereoWidth) > HOST_PUSH_DEADBAND) {
+  if (!Number.isFinite(lastSentStereoWidth) ||
+      Math.abs(stereoWidthValue - lastSentStereoWidth) > HOST_PUSH_DEADBAND) {
     sendHostAction("native_fold_set", {
       id: "output_width",
       value: stereoWidthValue.toFixed(6)
@@ -1178,12 +998,8 @@ class Knob {
 
     this.dragging = false;
 
-    // UI layer: keep value normalized to 0~1
-    // Normalize initial value
     this.normalized = (value - min) / (max - min);
     this.normalized = constrain(this.normalized, 0, 1);
-
-    // Compute mapped real value
     this.value = this.computeValue();
   }
 
@@ -1307,11 +1123,13 @@ class Knob {
     const range = this.max - this.min;
     let linear = range !== 0 ? (v - this.min) / range : 0;
     linear = constrain(linear, 0, 1);
+
     if (this.taper !== 1.0 && this.taper > 0) {
       this.normalized = pow(linear, 1.0 / this.taper);
     } else {
       this.normalized = linear;
     }
+
     this.value = this.computeValue();
   }
 }
