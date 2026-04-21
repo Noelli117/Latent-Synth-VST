@@ -59,6 +59,23 @@ void RaveAP::modelPerform() {
 
     // Latent modifications
     const bool useExternalLatent = _externalLatentMode.load();
+    if (useExternalLatent) {
+      LatentFlowController::Params flowParams;
+      flowParams.speed = _webUiFlowSpeed.load();
+      flowParams.noiseScale = _webUiFlowNoiseScale.load();
+      flowParams.curve = _webUiFlowCurve.load();
+      flowParams.gain = _webUiFlowGain.load();
+      flowParams.contrast = _webUiFlowContrast.load();
+      flowParams.intensity = _webUiFlowIntensity.load();
+      _latentFlowController.setParams(flowParams);
+      const float stepDt =
+          (_sampleRate > 0.0) ? ((float)input_size / (float)_sampleRate)
+                              : (1.0f / 60.0f);
+      _latentFlowController.step(stepDt);
+      const auto &flowLatent = _latentFlowController.getLatent();
+      updateRuntimeExternalLatentValues(flowLatent);
+      _webUiFlowRadius.store(_latentFlowController.getRadius());
+    }
     int64_t n_dimensions =
         std::min((int)latent_traj.size(1), (int)AVAILABLE_DIMS);
 
@@ -149,6 +166,14 @@ void RaveAP::modelPerform() {
     at::Tensor outL = out.index({0, 0, at::indexing::Slice()});
     at::Tensor outR = out.index({0, outIndexR, at::indexing::Slice()});
 
+    if (outIndexR != 0) {
+      const float width = juce::jlimit(0.0f, 2.0f, _widthValue->load() / 100.f);
+      const at::Tensor mid = 0.5f * (outL + outR);
+      const at::Tensor side = 0.5f * (outL - outR) * width;
+      outL = mid + side;
+      outR = mid - side;
+    }
+
 #if DEBUG_PERFORM
     std::cout << "latent decoded" << std::endl;
 #endif
@@ -203,8 +228,7 @@ void RaveAP::processBlock(juce::AudioBuffer<float> &buffer,
         unmute();
       } else if (!isPlaying && !_isMuted.load()) {
         mute();
-        _inBuffer.get()->reset();
-        _outBuffer.get()->reset();
+        resetStreamingBuffers();
       }
     }
   }
@@ -317,29 +341,34 @@ void RaveAP::parameterChanged(const String &parameterID, float newValue) {
   } else if (parameterID == rave_parameters::output_drywet) {
     _dryWetMixerEffect.setWetMixProportion(newValue / 100.f);
   } else if (parameterID == rave_parameters::latency_mode) {
-    auto latency_samples = pow(2, *_latencyMode);
+    auto latency_samples = std::pow(2.0f, _latencyMode->load());
     std::cout << "[ ] - latency has changed to " << latency_samples
               << std::endl;
-    setLatencySamples(latency_samples);
-    _dryWetMixerEffect.setWetLatency(latency_samples);
+    syncLatencyModeToSamples();
   }
 }
 
 void RaveAP::updateBufferSizes() {
   if (_rave == nullptr)
     return;
-  auto validBufferSizes = _rave->getValidBufferSizes();
-  float a = validBufferSizes.getStart();
-  float b = validBufferSizes.getEnd();
+  const auto validBufferSizes = _rave->getValidBufferSizes();
+  const auto minSamples = std::max(1, static_cast<int>(validBufferSizes.getStart()));
+  const auto maxSamples = std::max(minSamples, static_cast<int>(validBufferSizes.getEnd()));
+  const auto currentExponent = static_cast<int>(_latencyMode->load());
+  const auto currentSamples = static_cast<int>(std::pow(2.0f, _latencyMode->load()));
 
-  if (*_latencyMode < a) {
-    std::cout << "to low; setting rate to : " << static_cast<int>(log2(a))
-              << std::endl;
-    *_latencyMode = static_cast<int>(log2(a));
-  } else if (*_latencyMode > b) {
-    std::cout << "to high; setting rate to : " << static_cast<int>(log2(b))
-              << std::endl;
-    *_latencyMode = static_cast<int>(log2(b));
+  if (currentSamples < minSamples) {
+    const auto targetExponent = static_cast<int>(std::log2((float)minSamples));
+    std::cout << "too low; setting rate to : " << targetExponent << std::endl;
+    setParameterValueNotifyingHost(rave_parameters::latency_mode,
+                                   static_cast<float>(targetExponent));
+  } else if (currentSamples > maxSamples) {
+    const auto targetExponent = static_cast<int>(std::log2((float)maxSamples));
+    std::cout << "too high; setting rate to : " << targetExponent << std::endl;
+    setParameterValueNotifyingHost(rave_parameters::latency_mode,
+                                   static_cast<float>(targetExponent));
+  } else if (currentExponent >= 0) {
+    syncLatencyModeToSamples();
   }
 }
 

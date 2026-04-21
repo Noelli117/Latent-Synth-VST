@@ -57,6 +57,7 @@ juce::StringArray getNativeFoldParamIds() {
       rave_parameters::input_thresh, rave_parameters::input_ratio,
       rave_parameters::output_gain,  rave_parameters::output_drywet,
       rave_parameters::output_limit, rave_parameters::latency_mode,
+      rave_parameters::latent_jitter, rave_parameters::output_width,
   };
 }
 
@@ -68,6 +69,7 @@ bool isEmergencyNativeUiEnabled() {
   return std::string(value) == "1" || std::string(value) == "true" ||
          std::string(value) == "TRUE";
 }
+
 } // namespace
 
 class RaveAPEditor::LatentWebView : public juce::WebBrowserComponent {
@@ -196,7 +198,6 @@ RaveAPEditor::~RaveAPEditor() {
   if (audioProcessor._rave != nullptr) {
     audioProcessor._rave->removeChangeListener(this);
   }
-  audioProcessor.setExternalLatentMode(false);
 }
 
 void RaveAPEditor::importModel() {
@@ -398,6 +399,20 @@ bool RaveAPEditor::writeBundledWebAsset(const String &assetSuffix,
   return outputFile.replaceWithData(data, (size_t)dataSize);
 }
 
+void RaveAPEditor::mirrorWebDebugFile(const String &fileName,
+                                      const String &content) {
+  if (_modelsDirPath == File()) {
+    return;
+  }
+
+  const File debugDir = _modelsDirPath.getChildFile("webui_debug");
+  if (!debugDir.exists()) {
+    debugDir.createDirectory();
+  }
+
+  debugDir.getChildFile(fileName).replaceWithText(content);
+}
+
 void RaveAPEditor::setupLatentWebView() {
   _webUiDir = File::getSpecialLocation(File::tempDirectory)
                   .getChildFile("acids-rave-latent-webui");
@@ -430,6 +445,7 @@ void RaveAPEditor::setupLatentWebView() {
   _modelExplorer.setVisible(false);
   writeWebModelListScript("");
   writeWebNativeFoldParamsScript("");
+  writeWebLatentStateScript("");
 
   if (canLoadUnpackedPage) {
     URL webUiUrl(_webUiDir.getChildFile("index.html"));
@@ -554,6 +570,54 @@ void RaveAPEditor::writeWebNativeFoldParamsScript(const String &requestId) {
       "window.__hostNativeFoldParamsVersion = " +
       String(Time::getMillisecondCounterHiRes()) + ";\n";
   _webUiDir.getChildFile("host_native_fold_params.js").replaceWithText(script);
+  mirrorWebDebugFile("host_native_fold_params.js", script);
+}
+
+void RaveAPEditor::writeWebLatentStateScript(const String &requestId) {
+  if (_webUiDir == File()) {
+    return;
+  }
+
+  juce::Array<juce::var> latentScale;
+  juce::Array<juce::var> latentBias;
+  juce::Array<juce::var> externalLatent;
+  for (size_t i = 0; i < AVAILABLE_DIMS; ++i) {
+    latentScale.add(audioProcessor.getLatentScaleValue(i));
+    latentBias.add(audioProcessor.getLatentBiasValue(i));
+    externalLatent.add(audioProcessor.getExternalLatentValue(i));
+  }
+
+  auto *payload = new DynamicObject();
+  payload->setProperty("req", requestId);
+  payload->setProperty("mode",
+                       audioProcessor.getExternalLatentMode() ? "global"
+                                                              : "native");
+  payload->setProperty("scale", juce::var(latentScale));
+  payload->setProperty("bias", juce::var(latentBias));
+  payload->setProperty("latent", juce::var(externalLatent));
+  payload->setProperty("flowSpeed", audioProcessor.getWebUiFlowSpeed());
+  payload->setProperty("flowNoiseScale", audioProcessor.getWebUiFlowNoiseScale());
+  payload->setProperty("flowCurve", audioProcessor.getWebUiFlowCurve());
+  payload->setProperty("flowGain", audioProcessor.getWebUiFlowGain());
+  payload->setProperty("flowContrast", audioProcessor.getWebUiFlowContrast());
+  payload->setProperty("flowIntensity", audioProcessor.getWebUiFlowIntensity());
+  payload->setProperty("flowRadius", audioProcessor.getWebUiFlowRadius());
+  if (auto *latentJitterRaw =
+          _avts.getRawParameterValue(rave_parameters::latent_jitter)) {
+    payload->setProperty("latentJitter", latentJitterRaw->load());
+  }
+  if (auto *outputWidthRaw =
+          _avts.getRawParameterValue(rave_parameters::output_width)) {
+    payload->setProperty("stereoWidth", outputWidthRaw->load());
+  }
+
+  const String json = JSON::toString(juce::var(payload));
+  const String script =
+      "window.__hostLatentState = " + json + ";\n"
+      "window.__hostLatentStateVersion = " +
+      String(Time::getMillisecondCounterHiRes()) + ";\n";
+  _webUiDir.getChildFile("host_latent_state.js").replaceWithText(script);
+  mirrorWebDebugFile("host_latent_state.js", script);
 }
 
 void RaveAPEditor::handleWebViewUrl(const String &urlString) {
@@ -565,8 +629,6 @@ void RaveAPEditor::handleWebViewUrl(const String &urlString) {
     const std::string raw(value);
     return raw == "1" || raw == "true" || raw == "TRUE";
   }();
-  static String lastDebugMode;
-  static int debugStreamCount = 0;
 
   const auto logBridge = [](const String &message) {
     juce::Logger::writeToLog(message);
@@ -700,6 +762,7 @@ void RaveAPEditor::handleWebViewUrl(const String &urlString) {
   }
   if (action.equalsIgnoreCase("native_fold_get")) {
     writeWebNativeFoldParamsScript(requestId);
+    writeWebLatentStateScript(requestId);
     return;
   }
   if (action.equalsIgnoreCase("native_fold_set")) {
@@ -716,6 +779,7 @@ void RaveAPEditor::handleWebViewUrl(const String &urlString) {
       }
     }
     writeWebNativeFoldParamsScript(requestId);
+    writeWebLatentStateScript(requestId);
     return;
   }
 
@@ -749,34 +813,38 @@ void RaveAPEditor::handleWebViewUrl(const String &urlString) {
     audioProcessor.setExternalLatentMode(useGlobalLatent);
   }
 
-  if (verboseBridgeLogs) {
-    const String dbgG0 = getUrlParameterValue(url, "g0");
-    const String dbgS0 = getUrlParameterValue(url, "s0");
-    const String dbgB0 = getUrlParameterValue(url, "b0");
-    const bool modeChanged = mode != lastDebugMode;
-    ++debugStreamCount;
-    if (modeChanged || (debugStreamCount % 20 == 0)) {
-      const String dbgMessage =
-          "[latent_synth_v3][web_bridge][latent_stream_dbg] mode=" + mode +
-                " externalMode=" +
-                String(audioProcessor.getExternalLatentMode() ? 1 : 0) +
-                " g0=" + dbgG0 + " s0=" + dbgS0 + " b0=" + dbgB0 +
-                " seq=" + seqRaw;
-      logBridge(dbgMessage);
-      lastDebugMode = mode;
-    }
+  const String rawFlowSpeed = getUrlParameterValue(url, "fspeed");
+  const String rawFlowNoiseScale = getUrlParameterValue(url, "fnoise");
+  const String rawFlowCurve = getUrlParameterValue(url, "fcurve");
+  const String rawFlowGain = getUrlParameterValue(url, "fgain");
+  const String rawFlowContrast = getUrlParameterValue(url, "fcontrast");
+  const String rawFlowIntensity = getUrlParameterValue(url, "fintensity");
+
+  if (rawFlowSpeed.isNotEmpty()) {
+    audioProcessor.setWebUiFlowSpeed(rawFlowSpeed.getFloatValue());
+  }
+  if (rawFlowNoiseScale.isNotEmpty()) {
+    audioProcessor.setWebUiFlowNoiseScale(rawFlowNoiseScale.getFloatValue());
+  }
+  if (rawFlowCurve.isNotEmpty()) {
+    audioProcessor.setWebUiFlowCurve(rawFlowCurve.getFloatValue());
+  }
+  if (rawFlowGain.isNotEmpty()) {
+    audioProcessor.setWebUiFlowGain(rawFlowGain.getFloatValue());
+  }
+  if (rawFlowContrast.isNotEmpty()) {
+    audioProcessor.setWebUiFlowContrast(rawFlowContrast.getFloatValue());
+  }
+  if (rawFlowIntensity.isNotEmpty()) {
+    audioProcessor.setWebUiFlowIntensity(rawFlowIntensity.getFloatValue());
   }
 
   for (size_t i = 0; i < AVAILABLE_DIMS; ++i) {
     const String scaleName = "s" + String((int)i);
     const String biasName = "b" + String((int)i);
-    const String globalName = "g" + String((int)i);
-    const String legacyLatentName = "z" + String((int)i);
 
     const String rawScale = getUrlParameterValue(url, scaleName);
     const String rawBias = getUrlParameterValue(url, biasName);
-    const String rawGlobal = getUrlParameterValue(url, globalName);
-    const String rawLegacyLatent = getUrlParameterValue(url, legacyLatentName);
 
     if (rawScale.isNotEmpty()) {
       audioProcessor.setLatentScaleValue(i, rawScale.getFloatValue());
@@ -784,12 +852,7 @@ void RaveAPEditor::handleWebViewUrl(const String &urlString) {
     if (rawBias.isNotEmpty()) {
       audioProcessor.setLatentBiasValue(i, rawBias.getFloatValue());
     }
-
-    if (useGlobalLatent && rawGlobal.isNotEmpty()) {
-      audioProcessor.setExternalLatentValue(i, rawGlobal.getFloatValue());
-    } else if (useGlobalLatent && rawLegacyLatent.isNotEmpty()) {
-      // Backward compatibility with earlier "zN" payloads.
-      audioProcessor.setExternalLatentValue(i, rawLegacyLatent.getFloatValue());
-    }
   }
+
+  writeWebLatentStateScript(requestId);
 }

@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.15)
-project(rave-vst VERSION 0.0.1)
+project(rave-vst VERSION 0.0.5)
 set (target_name ${PROJECT_NAME})
+set (plugin_display_name "Latent Synth")
+set (plugin_product_name "${plugin_display_name} v${PROJECT_VERSION}")
 
 ##### Compilation options
 if(NOT CMAKE_BUILD_TYPE)
@@ -8,7 +10,7 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 if(APPLE)
-  set (formats AU VST3 Standalone)
+  set (formats VST3 Standalone)
 else()
   set (formats VST3 Standalone)
 endif()
@@ -26,12 +28,12 @@ function(add_assets_from_directories target imagesSubFolder webSubFolder)
     set (ImagesDir ${CMAKE_CURRENT_LIST_DIR}/${imagesSubFolder})
     set (WebDir ${CMAKE_CURRENT_LIST_DIR}/${webSubFolder})
 
-    file(GLOB_RECURSE image_assets
+    file(GLOB_RECURSE image_assets CONFIGURE_DEPENDS
             "${ImagesDir}/*.jpg"
             "${ImagesDir}/*.png"
             "${ImagesDir}/*.jpeg"
     )
-    file(GLOB web_assets
+    file(GLOB web_assets CONFIGURE_DEPENDS
             "${WebDir}/*.html"
             "${WebDir}/*.js"
             "${WebDir}/*.css"
@@ -66,14 +68,14 @@ add_subdirectory(juce)
 juce_add_plugin(${target_name}
     ICON_BIG assets/icon.png                              # ICON_* arguments specify a path to an image file to use as an icon for the Standalone
     ICON_SMALL assets/icon.png
-    COMPANY_NAME acids                          # Specify the name of the plugin's author
-    BUNDLE_ID "com.acids.latent_synth_v3"
+    COMPANY_NAME "${plugin_display_name}"       # Specify the name of the plugin's author
+    BUNDLE_ID "com.latentsynth.plugin"
     VST2_CATEGORY kPlugCategEffect
     VST3_CATEGORIES Fx Generator Synth
-    PLUGIN_MANUFACTURER_CODE Acid              # A four-character manufacturer id with at least one upper-case character
-    PLUGIN_CODE ltV3                            # A unique four-character plugin id with exactly one upper-case character
+    PLUGIN_MANUFACTURER_CODE Lsyn              # A four-character manufacturer id with at least one upper-case character
+    PLUGIN_CODE ltSy                           # A unique four-character plugin id with exactly one upper-case character
     FORMATS ${formats}                     # The formats to build. Other valid formats are: AAX Unity VST AU AUv3
-    PRODUCT_NAME "latent_synth_v3"       # The name of the final executable, which can differ from the target name
+    PRODUCT_NAME "${plugin_product_name}"  # The name of the final executable, which can differ from the target name
     NEEDS_WEB_BROWSER TRUE)
 
 ##### `juce_generate_juce_header` will create a JuceHeader.h for a given target, which will be generated

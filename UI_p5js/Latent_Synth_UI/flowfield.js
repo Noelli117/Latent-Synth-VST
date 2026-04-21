@@ -31,21 +31,21 @@ const FORCED_NAV_ACTIONS = new Set([
   "download_model",
 ]);
 let hostStreamSeq = 1;
-let lastHostPushMs = 0;
 let lastSentMode = "";
-let lastSentRadius = NaN;
-let lastSentGlobal = new Array(LATENT_DIM).fill(NaN);
 let lastSentScale = new Array(LATENT_DIM).fill(NaN);
 let lastSentBias = new Array(LATENT_DIM).fill(NaN);
-
-let radius = 0;
-
+let lastSentLatentJitter = NaN;
+let lastSentStereoWidth = NaN;
+let hostLatentStateHydrated = false;
+let nativeFoldParamsHydrated = false;
 
 let scale = new Array(LATENT_DIM).fill(1);
 let bias = new Array(LATENT_DIM).fill(0);
 
 let particles = [];
-
+let moldLayer;
+let moldAgents = [];
+let lastRenderedMode = -1;
 let curviness = 1;
 const BASE_PARTICLES = 128;
 const MAX_PARTICLES = 320;
@@ -57,20 +57,14 @@ let intensity = 0.3; // Controls latent responsiveness and liveliness
 
 const pi = Math.PI;
 const EPSILON = 0.000001; // Prevent division by zero
-const LATENT_RADIUS_MIN = 0.05;
-const LATENT_RADIUS_MAX = 8.0;
-const LATENT_NOISE_MAX = 4.0;
-const TEMPORAL_JITTER_ONSET = 0.6;
 const PARTICLE_STROKE_ALPHA = 190;
 const TRAIL_DEFOG_ALPHA = 10;
-
-
-// 8D latent state
-let latent = new Array(LATENT_DIM).fill(0);
-let latentDirection = new Array(LATENT_DIM).fill(0);
-let latentNoiseState = new Array(LATENT_DIM).fill(0);
-let directionUnit = new Array(LATENT_DIM).fill(0);
-let targetLatent = new Array(LATENT_DIM).fill(0);
+const MOLD_LAYER_SCALE = 1.0;
+const MOLD_BASE_COUNT = 2800;
+const MOLD_FADE_ALPHA = 8;
+const MOLD_BG_ALPHA = 235;
+const KNOB_LABEL_SIZE = 13;
+const KNOB_LABEL_HEIGHT = 22;
 
 // Flow Field mode knobs
 let knobSpeed;
@@ -165,6 +159,271 @@ function sendHostAction(action, params = {}) {
 
 function loadHostModelsFile(onDone) {
   loadHostScriptPayload("host-models-script", "host_models.js", "__hostModels", onDone);
+}
+
+function mean(values, transform = (v) => v) {
+  if (!values || values.length === 0) return 0;
+  let sum = 0;
+  for (let i = 0; i < values.length; i++) {
+    sum += transform(values[i]);
+  }
+  return sum / values.length;
+}
+
+
+// Original tutorial credit: Patt Vira, "Slime Molds (Physarum)".
+// Algorithm reference noted in the source sketch: Jeff Jones, Physarum transport-network approximation.
+function initMoldLayer() {
+  const layerWidth = max(160, floor(width * MOLD_LAYER_SCALE));
+  const layerHeight = max(112, floor(height * MOLD_LAYER_SCALE));
+  moldLayer = createGraphics(layerWidth, layerHeight);
+  moldLayer.pixelDensity(1);
+  moldLayer.background(0);
+  resetMoldSystem();
+}
+
+function resetMoldSystem() {
+  if (!moldLayer) return;
+  moldLayer.background(0);
+  moldAgents = [];
+  for (let i = 0; i < MOLD_BASE_COUNT; i++) {
+    moldAgents.push(new MoldAgent(moldLayer.width, moldLayer.height));
+  }
+}
+
+function sampleMoldValue(layer, x, y) {
+  const px = constrain(floor(x), 0, layer.width - 1);
+  const py = constrain(floor(y), 0, layer.height - 1);
+  const index = 4 * (py * layer.width + px);
+  return layer.pixels[index] || 0;
+}
+
+function drawNativeMoldBackground() {
+  if (!moldLayer) initMoldLayer();
+
+  const latentNoiseAmount = knobLatentNoise ? knobLatentNoise.value : 0;
+  const stereoWidthAmount = knobStereoWidth ? knobStereoWidth.value : 100;
+  const stereoWidthNorm = map(constrain(stereoWidthAmount, 0, 200), 0, 200, -1, 1);
+  const latentNoiseNorm = map(constrain(latentNoiseAmount, 0, 3), 0, 3, 0, 1);
+
+  // Each latent pair controls one visual behavior family in native mode.
+  const speedScale = map(constrain(scale[0], 0, 5), 0, 5, 0.55, 2.6);
+  const headingDrift = map(constrain(bias[0], -3, 3), -3, 3, -0.09, 0.09);
+
+  const sensorDist = map(constrain(scale[1], 0, 5), 0, 5, 4, 22);
+  const baseSensorAngle = map(constrain(bias[1], -3, 3), -3, 3, pi / 16, pi / 1.85);
+  const sensorAngle = constrain(baseSensorAngle + stereoWidthNorm * (pi / 10), pi / 20, pi / 1.5);
+
+  const turnAngle = map(constrain(scale[2], 0, 5), 0, 5, pi / 20, pi / 2.4);
+  const jitter = map(constrain(Math.abs(bias[2]), 0, 3), 0, 3, 0, pi / 10) +
+    map(constrain(latentNoiseAmount, 0, 3), 0, 3, 0, pi / 8);
+
+  const fadeAlpha = constrain(
+    map(constrain(scale[3], 0, 5), 0, 5, 10, 1.0) - latentNoiseNorm * 2.5,
+    1.0,
+    14
+  );
+  const bgAlpha = map(constrain(bias[3], -3, 3), -3, 3, 255, 205);
+
+  const densityFromLatent = map(constrain(scale[4], 0, 5), 0, 5, MOLD_BASE_COUNT * 0.35, MOLD_BASE_COUNT);
+  const activeCount = floor(min(MOLD_BASE_COUNT,
+    densityFromLatent * map(constrain(intensity, 0.3, 1.0), 0.3, 1.0, 0.88, 1.0)
+  ));
+  const depositAlpha = map(constrain(bias[4], -3, 3), -3, 3, 190, 255);
+
+  const radius = map(constrain(scale[5], 0, 5), 0, 5, 0.35, 1.8);
+  const centerForce = map(constrain(bias[5], -3, 3), -3, 3, -0.035, 0.035);
+
+  const anisotropyAmount = map(constrain(scale[6], 0, 5), 0, 5, 0, 0.65);
+  const anisotropyDirection = map(constrain(bias[6], -3, 3), -3, 3, -1, 1);
+  const widthStretch = 1 + stereoWidthNorm * 0.6;
+  const xStretch = constrain((1 + anisotropyAmount * anisotropyDirection) * widthStretch, 0.3, 2.1);
+  const yStretch = constrain((1 - anisotropyAmount * anisotropyDirection) / widthStretch, 0.3, 2.1);
+
+  const noiseInfluence = map(constrain(scale[7], 0, 5), 0, 5, 0, 0.12) +
+    latentNoiseNorm * 0.18;
+  const warmCool = map(constrain(bias[7], -3, 3), -3, 3, -1, 1);
+  const stereoTintBoost = map(constrain(stereoWidthAmount, 0, 200), 0, 200, 0.75, 1.15);
+  const tintR = constrain(235 + warmCool * 48 * stereoTintBoost, 150, 255);
+  const tintG = constrain(240 - Math.abs(warmCool) * 10, 170, 255);
+  const tintB = constrain(235 - warmCool * 70 * stereoTintBoost, 150, 255);
+
+  moldLayer.background(0, fadeAlpha);
+  moldLayer.loadPixels();
+
+  for (let i = 0; i < activeCount; i++) {
+    moldAgents[i].r = radius;
+    moldAgents[i].sensorDist = sensorDist;
+    moldAgents[i].sensorAngle = sensorAngle;
+    moldAgents[i].rotAngle = turnAngle;
+    moldAgents[i].update(moldLayer, {
+      speedScale,
+      headingDrift,
+      jitter,
+      centerForce,
+      xStretch,
+      yStretch,
+      noiseInfluence,
+    });
+  }
+
+  moldLayer.noStroke();
+  moldLayer.fill(255, depositAlpha);
+  for (let i = 0; i < activeCount; i++) {
+    moldAgents[i].display(moldLayer);
+  }
+
+  background(0, bgAlpha);
+  tint(tintR, tintG, tintB, MOLD_BG_ALPHA);
+  image(moldLayer, 0, 0, width, height);
+  noTint();
+}
+
+// Agent behavior below is adapted from the same local `mold.js` implementation,
+// then extended here for latent-driven modulation inside the UI native mode.
+class MoldAgent {
+  constructor(boundsWidth, boundsHeight) {
+    this.boundsWidth = boundsWidth;
+    this.boundsHeight = boundsHeight;
+
+    this.x = random(boundsWidth);
+    this.y = random(boundsHeight);
+    this.r = 0.55;
+
+    this.heading = random(TWO_PI);
+    this.vx = cos(this.heading);
+    this.vy = sin(this.heading);
+    this.rotAngle = pi / 4;
+
+    this.rSensorPos = createVector(0, 0);
+    this.lSensorPos = createVector(0, 0);
+    this.fSensorPos = createVector(0, 0);
+    this.sensorAngle = pi / 4;
+    this.sensorDist = 10;
+  }
+
+  update(layer, config) {
+    if (config.noiseInfluence > 0) {
+      const field = noise(this.x * 0.0045, this.y * 0.0045, frameCount * 0.01);
+      this.heading += map(field, 0, 1, -config.noiseInfluence, config.noiseInfluence);
+    }
+
+    if (config.centerForce !== 0) {
+      const centerAngle = atan2(this.boundsHeight * 0.5 - this.y, this.boundsWidth * 0.5 - this.x);
+      const delta = atan2(sin(centerAngle - this.heading), cos(centerAngle - this.heading));
+      this.heading += delta * config.centerForce;
+    }
+
+    this.heading += config.headingDrift;
+
+    this.vx = cos(this.heading) * config.speedScale * config.xStretch;
+    this.vy = sin(this.heading) * config.speedScale * config.yStretch;
+
+    this.x = (this.x + this.vx + this.boundsWidth) % this.boundsWidth;
+    this.y = (this.y + this.vy + this.boundsHeight) % this.boundsHeight;
+
+    this.getSensorPos(this.rSensorPos, this.heading + this.sensorAngle);
+    this.getSensorPos(this.lSensorPos, this.heading - this.sensorAngle);
+    this.getSensorPos(this.fSensorPos, this.heading);
+
+    const r = sampleMoldValue(layer, this.rSensorPos.x, this.rSensorPos.y);
+    const l = sampleMoldValue(layer, this.lSensorPos.x, this.lSensorPos.y);
+    const f = sampleMoldValue(layer, this.fSensorPos.x, this.fSensorPos.y);
+
+    if (f < l && f < r) {
+      this.heading += random() < 0.5 ? this.rotAngle : -this.rotAngle;
+    } else if (l > r) {
+      this.heading -= this.rotAngle;
+    } else if (r > l) {
+      this.heading += this.rotAngle;
+    }
+
+    if (config.jitter > 0) {
+      this.heading += random(-config.jitter, config.jitter);
+    }
+  }
+
+  display(layer) {
+    layer.ellipse(this.x, this.y, this.r * 2, this.r * 2);
+  }
+
+  getSensorPos(sensor, angle) {
+    sensor.x = (this.x + this.sensorDist * cos(angle) + this.boundsWidth) % this.boundsWidth;
+    sensor.y = (this.y + this.sensorDist * sin(angle) + this.boundsHeight) % this.boundsHeight;
+  }
+}
+
+function loadHostLatentStateFile(onDone) {
+  loadHostScriptPayload(
+    "host-latent-state-script",
+    "host_latent_state.js",
+    "__hostLatentState",
+    onDone
+  );
+}
+
+function applyHostLatentState(data) {
+  if (!data) return;
+
+  const mode = data.mode === "global" ? 0 : 1;
+  uiMode = mode;
+  hostLatentStateHydrated = true;
+
+  const scaleValues = Array.isArray(data.scale) ? data.scale : [];
+  const biasValues = Array.isArray(data.bias) ? data.bias : [];
+  const flowSpeed = Number.isFinite(Number(data.flowSpeed)) ? Number(data.flowSpeed) : 5;
+  const flowNoiseScale = Number.isFinite(Number(data.flowNoiseScale)) ? Number(data.flowNoiseScale) : 0.0255;
+  const flowCurve = Number.isFinite(Number(data.flowCurve)) ? Number(data.flowCurve) : 2.25;
+  const flowGainValue = Number.isFinite(Number(data.flowGain)) ? Number(data.flowGain) : 0.155;
+  const flowContrastValue = Number.isFinite(Number(data.flowContrast)) ? Number(data.flowContrast) : 0.475;
+  const flowIntensityValue = Number.isFinite(Number(data.flowIntensity)) ? Number(data.flowIntensity) : 0.65;
+  const latentJitterValue = Number.isFinite(Number(data.latentJitter)) ? Number(data.latentJitter) : 0;
+  const stereoWidthValue = Number.isFinite(Number(data.stereoWidth)) ? Number(data.stereoWidth) : 100;
+
+  if (knobSpeed) knobSpeed.setValue(flowSpeed);
+  if (knobNoise) knobNoise.setValue(flowNoiseScale);
+  if (knobCurve) knobCurve.setValue(flowCurve);
+  if (knobFlowGain) knobFlowGain.setValue(flowGainValue);
+  if (knobContrast) knobContrast.setValue(flowContrastValue);
+  if (knobIntensity) knobIntensity.setValue(flowIntensityValue);
+  if (knobLatentNoise) knobLatentNoise.setValue(latentJitterValue);
+  if (knobStereoWidth) knobStereoWidth.setValue(stereoWidthValue);
+  lastSentLatentJitter = latentJitterValue;
+  lastSentStereoWidth = stereoWidthValue;
+  lastSentMode = data.mode === "global" ? "global" : "native";
+
+  const latentPairs = getLatentKnobPairs();
+  for (let i = 0; i < latentPairs.length; i++) {
+    const biasValue = Number.isFinite(Number(biasValues[i])) ? Number(biasValues[i]) : 0;
+    const scaleValue = Number.isFinite(Number(scaleValues[i])) ? Number(scaleValues[i]) : 1;
+    latentPairs[i][0].setValue(biasValue);
+    latentPairs[i][1].setValue(scaleValue);
+    bias[i] = biasValue;
+    scale[i] = scaleValue;
+  }
+  copyArrayValues(lastSentScale, scale);
+  copyArrayValues(lastSentBias, bias);
+}
+
+function requestHostLatentState() {
+  const req = sendHostAction("native_fold_get");
+
+  const poll = (triesLeft) => {
+    loadHostLatentStateFile((data) => {
+      if (data && (!req || !data.req || data.req === req)) {
+        applyHostLatentState(data);
+        return;
+      }
+
+      if (triesLeft > 0) {
+        setTimeout(() => poll(triesLeft - 1), 120);
+      } else if (window.__hostLatentState) {
+        applyHostLatentState(window.__hostLatentState);
+      }
+    });
+  };
+
+  poll(12);
 }
 
 function fillLocalModelSelect(localModels, selectedPath = "") {
@@ -478,6 +737,7 @@ function addNativeFoldToggle(parent, config) {
 
 function applyNativeFoldParams(params) {
   if (!params) return;
+  nativeFoldParamsHydrated = true;
 
   for (let i = 0; i < nativeFoldControls.length; i++) {
     const c = nativeFoldControls[i];
@@ -496,8 +756,20 @@ function applyNativeFoldParams(params) {
     }
   }
 
+  if ("latent_jitter" in params && knobLatentNoise) {
+    const latentJitterValue = Number(params.latent_jitter);
+    knobLatentNoise.setValue(latentJitterValue);
+    lastSentLatentJitter = latentJitterValue;
+  }
+
+  if ("output_width" in params && knobStereoWidth) {
+    const stereoWidthValue = Number(params.output_width);
+    knobStereoWidth.setValue(stereoWidthValue);
+    lastSentStereoWidth = stereoWidthValue;
+  }
+
   const fftSize = params.fft_size ? Math.round(Number(params.fft_size)) : 0;
-  setNativeFoldStatus(fftSize > 0 ? `FFT Size: ${fftSize}` : "Params synced");
+  setNativeFoldStatus(fftSize > 0 ? `Window Size: ${fftSize}` : "Params synced");
 }
 
 function requestNativeFoldParams() {
@@ -575,9 +847,9 @@ function createNativeFoldablePanel() {
     id: "output_limit", label: "Limit", defaultValue: true,
   });
 
-  const fftBody = addNativeFoldSection("FFT / Window");
+  const fftBody = addNativeFoldSection("Window Size");
   addNativeFoldSelect(fftBody, {
-    id: "latency_mode", label: "FFT Size",
+    id: "latency_mode", label: "Window Size",
     options: [
       { label: "512", value: 9 }, { label: "1024", value: 10 },
       { label: "2048", value: 11 }, { label: "4096", value: 12 },
@@ -621,23 +893,6 @@ function updateLatentArraysFromKnobs() {
     bias[i] = outerBiasKnob.value;
     scale[i] = innerScaleKnob.value;
   }
-}
-
-function getSmoothedRadius(values) {
-  let sumSq = 0;
-  for (let i = 0; i < values.length; i++) {
-    sumSq += values[i] * values[i];
-  }
-  return sqrt(sumSq);
-}
-
-// Box-Muller Gaussian white noise (mean=0, std=1)
-function randn() {
-  let u = 0;
-  let v = 0;
-  while (u === 0) u = Math.random();
-  while (v === 0) v = Math.random();
-  return sqrt(-2.0 * Math.log(u)) * cos(2.0 * pi * v);
 }
 
 function updateKnobsForCurrentMode() {
@@ -685,6 +940,7 @@ function setup() {
   // Canvas and background
   createCanvas(1000, 700);
   background(0);
+  initMoldLayer();
   
   // Top mode switch button
   modebutton = createButton("Switch Mode");
@@ -714,15 +970,6 @@ function setup() {
   for (let i = 0; i < MAX_PARTICLES; i++) {
     particles.push(createVector(random(width), random(height)));
   }
-
-  for (let i = 0; i < LATENT_DIM; i++) {
-    latent[i] = random(-1, 1);
-  }
-  
-  for (let i = 0; i < LATENT_DIM; i++) {
-    latentDirection[i] = random(-1, 1);
-  }
-  normalizeDirection();
 
   stroke(255);
   strokeWeight(3);
@@ -783,25 +1030,16 @@ function setup() {
     [knobBias7, knobScale7],
   ];
 
-}
+  requestNativeFoldParams();
+  requestHostLatentState();
 
-// Normalize direction vector
-function normalizeDirection() {
-  let mag = 0;
-  for (let i = 0; i < LATENT_DIM; i++) {
-    mag += latentDirection[i] * latentDirection[i];
-  }
-  mag = sqrt(mag) + EPSILON;
-
-  for (let i = 0; i < LATENT_DIM; i++) {
-    latentDirection[i] /= mag;
-  }
 }
 
 
 function draw() {
   // 1) Update knob state first
   updateKnobsForCurrentMode();
+  commitNativeBottomKnobsToHost();
 
   speed = knobSpeed.value;
   noiseScale = knobNoise.value;
@@ -810,182 +1048,66 @@ function draw() {
   contrast = knobContrast.value;
   intensity = knobIntensity.value;
 
-  // 2) Higher intensity -> longer trails (less per-frame erase)
-  const trailAlpha = lerp(16, 2, intensity);
-  background(0, trailAlpha);
-  // Soft cleanup: continuously remove residue without hard screen wipes.
-  noStroke();
-  fill(0, TRAIL_DEFOG_ALPHA);
-  rect(0, 0, width, height);
-  stroke(255, PARTICLE_STROKE_ALPHA);
-
-  // 3) Particle count scales with intensity
-  const activeParticles = floor(lerp(BASE_PARTICLES, MAX_PARTICLES, intensity));
-  let S = speed * flowGain;
-  let safeS = Math.max(S, EPSILON);
-  let sx = 1 - contrast;
-  let sy = 1 + contrast;
-  let invNum = 1 / activeParticles;
-
-  // Statistics used for latent generation
-  let sumVX = 0;
-  let sumVY = 0;
-  let sumPX = 0;
-  let sumPY = 0;
-  let sumNoise = 0;
-  let sumCos = 0;
-  let sumSin = 0;
-  let sumDriveMag = 0;
-  
-  // Flow field idea reference:
-  // https://www.youtube.com/watch?v=sZBfLgfsvSk
-  for (let i = 0; i < activeParticles; i++) {
-    let p = particles[i];
-    point(p.x, p.y);
-
-    let n = noise(p.x * noiseScale, p.y * noiseScale);
-    let a = pi * curviness * (n - 0.5);
-
-    // X/Y contrast coupling: when one side increases, the other is relatively reduced.
-
-    let tx = cos(a) * sx;
-    let ty = sin(a) * sy;
-    const driveMag = sqrt(tx * tx + ty * ty);
-    sumDriveMag += driveMag;
-
-    let magnitude = sqrt(tx * tx + ty * ty) + EPSILON;
-    let invMagnitude = 1 / magnitude;
-
-    let vx = tx * invMagnitude * S;
-    let vy = ty * invMagnitude * S;
-
-    p.x += vx;
-    p.y += vy;
-
-    // Velocity stats
-    sumVX += vx;
-    sumVY += vy;
-
-    // Position stats
-    sumPX += p.x;
-    sumPY += p.y;
-
-    // Noise stats
-    sumNoise += n;
-
-    // Direction stats (mean motion direction)
-    sumCos += tx * invMagnitude;
-    sumSin += ty * invMagnitude;
-
-    if (p.x < 0 || p.x > width || p.y < 0 || p.y > height) {
-      p.x = random(width);
-      p.y = random(height);
+  if (lastRenderedMode !== uiMode) {
+    if (uiMode === 1) {
+      resetMoldSystem();
     }
+    lastRenderedMode = uiMode;
   }
 
-  // Motion Energy -> Latent Radius:
-  // latent = radius * direction
-  // direction = timbre orientation, radius = energy/intensity.
+  if (uiMode === 0) {
+    // Higher intensity -> longer trails (less per-frame erase)
+    const trailAlpha = lerp(16, 2, intensity);
+    background(0, trailAlpha);
+    // Soft cleanup: continuously remove residue without hard screen wipes.
+    noStroke();
+    fill(0, TRAIL_DEFOG_ALPHA);
+    rect(0, 0, width, height);
+    stroke(255, PARTICLE_STROKE_ALPHA);
 
-  let meanVX = sumVX * invNum;
-  let meanVY = sumVY * invNum;
-  const meanDriveMag = sumDriveMag * invNum;
-  const maxDriveMag = Math.max(Math.abs(sx), Math.abs(sy)) + EPSILON;
-  const motionNorm = constrain(meanDriveMag / maxDriveMag, 0, 1);
-  let motionEnergy = motionNorm * safeS;
+    // Particle count scales with intensity
+    const activeParticles = floor(lerp(BASE_PARTICLES, MAX_PARTICLES, intensity));
+    const S = speed * flowGain;
+    const sx = 1 - contrast;
+    const sy = 1 + contrast;
 
-  // Map motion energy into latent radius range
-  let r_target = map(
-    motionEnergy,
-    0,
-    safeS,
-    LATENT_RADIUS_MIN,
-    LATENT_RADIUS_MAX
-  );
-  r_target = constrain(r_target, LATENT_RADIUS_MIN, LATENT_RADIUS_MAX);
+    // Flow field idea reference:
+    // https://www.youtube.com/watch?v=sZBfLgfsvSk
+    for (let i = 0; i < activeParticles; i++) {
+      let p = particles[i];
+      point(p.x, p.y);
 
-  // Extract 8D directional features from flow stats:
-  // d0/d1: spatial center, d2: noise complexity, d3: dominant motion angle
-  // d4/d5: mean velocity, d6: speed state, d7: curviness state
+      let n = noise(p.x * noiseScale, p.y * noiseScale);
+      let a = pi * curviness * (n - 0.5);
 
-  let avgX = sumPX * invNum;
-  let avgY = sumPY * invNum;
-  let avgNoise = sumNoise * invNum;
-  let avgAngle = atan2(sumSin * invNum, sumCos * invNum);
+      // X/Y contrast coupling: when one side increases, the other is relatively reduced.
 
-  // Build 8D direction features (roughly in [-1, 1])
-  let d = latentDirection;
+      let tx = cos(a) * sx;
+      let ty = sin(a) * sy;
+      let magnitude = sqrt(tx * tx + ty * ty) + EPSILON;
+      let invMagnitude = 1 / magnitude;
 
-  d[0] = map(avgX, 0, width, -1, 1);
-  d[1] = map(avgY, 0, height, -1, 1);
-  d[2] = avgNoise * 2 - 1;
-  d[3] = avgAngle / pi;
+      let vx = tx * invMagnitude * S;
+      let vy = ty * invMagnitude * S;
 
-  d[4] = map(meanVX, -safeS, safeS, -1, 1);
-  d[5] = map(meanVY, -safeS, safeS, -1, 1);
-  d[6] = map(speed, 0, 10, -1, 1);
-  d[7] = map(curviness, 0.5, 4, -1, 1);
+      p.x += vx;
+      p.y += vy;
 
-  // Normalize direction
-  let norm = 0;
-  for (let i = 0; i < LATENT_DIM; i++) {
-    norm += d[i] * d[i];
-  }
-  norm = sqrt(norm) + EPSILON;
-
-  for (let i = 0; i < LATENT_DIM; i++) {
-    directionUnit[i] = d[i] / norm;
-  }
-
-
-  // Apply radius scaling: latent = normalize(direction) * r_target
-  const isGlobalMode = (uiMode === 0);
-  const temporalJitterMix = constrain(
-    (intensity - TEMPORAL_JITTER_ONSET) / (1.0 - TEMPORAL_JITTER_ONSET),
-    0,
-    1
-  );
-  const motionJitterAmount = intensity * motionNorm * 0.6 * temporalJitterMix;
-  const latentNoiseAmount = intensity * LATENT_NOISE_MAX;
-  const noiseSpeed = lerp(0.03, 0.6, intensity);
-
-  for (let i = 0; i < LATENT_DIM; i++) {
-
-  // Global direction component
-  const global = r_target * directionUnit[i];
-
-  // Dual mode:
-  // global mode uses flow-field latent directly;
-  // native mode applies only local scale/bias.
-  if (isGlobalMode) {
-    targetLatent[i] = global;
-    const temporalJitter = (noise(frameCount * 0.02, i * 31.7) - 0.5) * 2.0;
-    targetLatent[i] += motionJitterAmount * temporalJitter;
-
-    // Gaussian perturbation update speed is tied to intensity:
-    // low intensity is smoother, high intensity changes faster.
-    latentNoiseState[i] = lerp(latentNoiseState[i], randn(), noiseSpeed);
-    targetLatent[i] += latentNoiseAmount * latentNoiseState[i];
+      if (p.x < 0 || p.x > width || p.y < 0 || p.y > height) {
+        p.x = random(width);
+        p.y = random(height);
+      }
+    }
   } else {
-    targetLatent[i] = bias[i];
+    drawNativeMoldBackground();
   }
-  }
-  // --------------------------------------------
-
-  const alpha = lerp(0.01, 0.25, intensity);
-  for (let i = 0; i < LATENT_DIM; i++) {
-    latent[i] += alpha * (targetLatent[i] - latent[i]);
-  }
-
-  let smoothedRadius = getSmoothedRadius(latent);
-
-  pushLatentToHost(smoothedRadius, latent, scale, bias);
+  pushLatentToHost(scale, bias);
   // 4) Draw knobs
   drawKnobsForCurrentMode();
 
 }
 
-// Push latent state to host
+// Push UI state to host
 function hasArrayDelta(current, previous, deadband) {
   for (let i = 0; i < LATENT_DIM; i++) {
     if (Math.abs(current[i] - previous[i]) > deadband) {
@@ -1001,23 +1123,24 @@ function copyArrayValues(destination, source) {
   }
 }
 
-function pushLatentToHost(radiusValue, latentValues, scaleValues, biasValues) {
-  if (!HOST_BRIDGE_ENABLED) return;
+function pushLatentToHost(scaleValues, biasValues) {
+  if (!HOST_BRIDGE_ENABLED || !hostLatentStateHydrated) return;
   const isGlobalMode = (uiMode === 0);
   const mode = isGlobalMode ? "global" : "native";
-  const nowMs = millis();
-  const modeChanged = mode !== lastSentMode;
 
   const params = new URLSearchParams();
   params.set("action", "latent_stream");
   params.set("mode", mode);
   params.set("seq", String(hostStreamSeq));
-  params.set("radius", radiusValue.toFixed(6));
+  params.set("fspeed", knobSpeed.value.toFixed(6));
+  params.set("fnoise", knobNoise.value.toFixed(6));
+  params.set("fcurve", knobCurve.value.toFixed(6));
+  params.set("fgain", knobFlowGain.value.toFixed(6));
+  params.set("fcontrast", knobContrast.value.toFixed(6));
+  params.set("fintensity", knobIntensity.value.toFixed(6));
 
   for (let i = 0; i < LATENT_DIM; i++) {
-    if (isGlobalMode) {
-      params.set(`g${i}`, latentValues[i].toFixed(6));
-    } else {
+    if (!isGlobalMode) {
       params.set(`s${i}`, scaleValues[i].toFixed(6));
       params.set(`b${i}`, biasValues[i].toFixed(6));
     }
@@ -1027,21 +1150,35 @@ function pushLatentToHost(radiusValue, latentValues, scaleValues, biasValues) {
   if (!sendBridgeQuery(query)) return;
 
   hostStreamSeq += 1;
-  lastHostPushMs = nowMs;
   lastSentMode = mode;
-  lastSentRadius = radiusValue;
-  if (isGlobalMode) {
-    copyArrayValues(lastSentGlobal, latentValues);
-  } else {
+  if (!isGlobalMode) {
     copyArrayValues(lastSentScale, scaleValues);
     copyArrayValues(lastSentBias, biasValues);
   }
 }
 
 function commitNativeBottomKnobsToHost() {
-  if (!HOST_BRIDGE_ENABLED || uiMode !== 1) return;
-  sendHostAction("native_fold_set", { id: "latent_jitter", value: knobLatentNoise.value.toFixed(6) });
-  sendHostAction("native_fold_set", { id: "output_width", value: knobStereoWidth.value.toFixed(6) });
+  if (!HOST_BRIDGE_ENABLED || uiMode !== 1 || !nativeFoldParamsHydrated) return;
+  const latentJitterValue = knobLatentNoise.value;
+  const stereoWidthValue = knobStereoWidth.value;
+
+  if (!Number.isFinite(lastSentLatentJitter) ||
+      Math.abs(latentJitterValue - lastSentLatentJitter) > HOST_PUSH_DEADBAND) {
+    sendHostAction("native_fold_set", {
+      id: "latent_jitter",
+      value: latentJitterValue.toFixed(6)
+    });
+    lastSentLatentJitter = latentJitterValue;
+  }
+
+  if (!Number.isFinite(lastSentStereoWidth) ||
+      Math.abs(stereoWidthValue - lastSentStereoWidth) > HOST_PUSH_DEADBAND) {
+    sendHostAction("native_fold_set", {
+      id: "output_width",
+      value: stereoWidthValue.toFixed(6)
+    });
+    lastSentStereoWidth = stereoWidthValue;
+  }
 }
 
 // ==========================
@@ -1072,12 +1209,8 @@ class Knob {
 
     this.dragging = false;
 
-    // UI layer: keep value normalized to 0~1
-    // Normalize initial value
     this.normalized = (value - min) / (max - min);
     this.normalized = constrain(this.normalized, 0, 1);
-
-    // Compute mapped real value
     this.value = this.computeValue();
   }
 
@@ -1174,12 +1307,28 @@ class Knob {
       sin(angle) * this.r * 0.8
     );
 
-    // Label
-    noStroke();
-    fill(255);
-    textAlign(CENTER);
-    textSize(12);
-    text(label, 0, this.r + 20);
+    // Label badge: keeps text readable over animated flow/mold backgrounds.
+    if (label) {
+      const labelY = this.r + 24;
+      textStyle(BOLD);
+      textSize(KNOB_LABEL_SIZE);
+      textAlign(CENTER, CENTER);
+      const labelWidth = textWidth(label) + 18;
+
+      drawingContext.shadowBlur = 12;
+      drawingContext.shadowColor = "rgba(255, 255, 255, 0.5)";
+      rectMode(CENTER);
+      fill(0, 220);
+      stroke(255, 230);
+      strokeWeight(1.2);
+      rect(0, labelY, labelWidth, KNOB_LABEL_HEIGHT, 8);
+
+      drawingContext.shadowBlur = 0;
+      noStroke();
+      fill(255);
+      text(label, 0, labelY - 1);
+      textStyle(NORMAL);
+    }
 
     pop();
   }
@@ -1198,9 +1347,15 @@ class Knob {
 
   // Utility method
   setValue(v) {
+    const range = this.max - this.min;
+    let linear = range !== 0 ? (v - this.min) / range : 0;
+    linear = constrain(linear, 0, 1);
 
-    this.normalized = (v - this.min) / (this.max - this.min);
-    this.normalized = constrain(this.normalized, 0, 1);
+    if (this.taper !== 1.0 && this.taper > 0) {
+      this.normalized = pow(linear, 1.0 / this.taper);
+    } else {
+      this.normalized = linear;
+    }
 
     this.value = this.computeValue();
   }
