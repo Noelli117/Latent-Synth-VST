@@ -2,6 +2,18 @@
 
 Latent Synth is a JUCE-based VST3/Standalone audio plugin built on top of a TorchScript-exported [RAVE](https://github.com/acids-ircam/RAVE) model. It takes incoming audio, encodes it into the RAVE latent space, applies controllable latent transformations, and decodes the result back to audio in real time.
 
+## Important
+
+Latent Synth is a host instrument/effect for TorchScript-exported RAVE models. The plugin itself does not ship with pretrained timbres or model files.
+
+To produce sound, you need to import a compatible `.ts` RAVE model into the plugin. You can download compatible pretrained models from IRCAM's RAVE model collection:
+
+https://forum.ircam.fr/collections/detail/rave-model-challenge/
+
+You can also train and export your own models from the official RAVE repository:
+
+https://github.com/acids-ircam/RAVE
+
 This repository combines two main layers:
 
 - `rave_vst_latent_synth/`: the C++ plugin and audio engine
@@ -264,7 +276,3 @@ If you publish this repository as a portfolio project, the recommended public di
 The source code in this repository is released under the MIT License. See [LICENSE](/Users/likejie/Documents/GitHub/EP-491/LICENSE).
 
 Third-party dependencies such as JUCE, libtorch, p5.js, and any external model assets remain subject to their own licenses and terms.
-
-## Summary
-
-This project starts from the standard RAVE plugin pipeline, but extends it into a more performative system: a flow-field simulation drives the latent space, a bundled p5.js interface exposes that controller inside the plugin, and the build/install flow packages libtorch for practical VST3 use on macOS.
