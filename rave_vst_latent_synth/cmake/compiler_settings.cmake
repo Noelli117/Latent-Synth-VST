@@ -1,8 +1,31 @@
 function (setup_compilers)
   if(APPLE)
-    set(CMAKE_C_COMPILER "/usr/local/opt/llvm/bin/clang")
-    set(CMAKE_CXX_COMPILER "/usr/local/opt/llvm/bin/clang++")
-    ##### Imported from RAVE audition plugin. Really necessary?
+    if (NOT CMAKE_C_COMPILER)
+      find_program(LATENT_SYNTH_CLANG
+        NAMES clang
+        PATHS
+          /opt/homebrew/opt/llvm/bin
+          /usr/local/opt/llvm/bin
+      )
+      if (LATENT_SYNTH_CLANG)
+        set(CMAKE_C_COMPILER "${LATENT_SYNTH_CLANG}" CACHE FILEPATH
+            "C compiler for Latent Synth" FORCE)
+      endif()
+    endif()
+
+    if (NOT CMAKE_CXX_COMPILER)
+      find_program(LATENT_SYNTH_CLANGXX
+        NAMES clang++
+        PATHS
+          /opt/homebrew/opt/llvm/bin
+          /usr/local/opt/llvm/bin
+      )
+      if (LATENT_SYNTH_CLANGXX)
+        set(CMAKE_CXX_COMPILER "${LATENT_SYNTH_CLANGXX}" CACHE FILEPATH
+            "C++ compiler for Latent Synth" FORCE)
+      endif()
+    endif()
+
     set(MACOSX_RPATH TRUE)
   endif(APPLE)
   if (MSVC)
@@ -16,5 +39,5 @@ function (setup_compilers)
 
   set(CMAKE_CXX_FLAGS "-Wall")
   set(CMAKE_CXX_FLAGS_DEBUG "-g")
-  set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native")
+  set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 endfunction()

@@ -12,16 +12,21 @@ CMAKE_FILE="$PROJECT_DIR/CMakeLists.txt"
 
 BUILD_DIR="${BUILD_DIR:-$PROJECT_DIR/build-arm64}"
 BUILD_TYPE="${BUILD_TYPE:-Release}"
-ARCH="${ARCH:-arm64}"
+ARCH="${ARCH:-$(uname -m)}"
 CLEAN_BUILD="${CLEAN_BUILD:-0}"
 VST3_DIR="${VST3_DIR:-$HOME/Library/Audio/Plug-Ins/VST3}"
 LEGACY_PLUGIN_NAMES="${LEGACY_PLUGIN_NAMES:-Latent Synth}"
+REMOVE_LEGACY_INSTALLS="${REMOVE_LEGACY_INSTALLS:-0}"
 EXPECTED_RPATH="@loader_path/../torch/libtorch"
 TMP_ROOT=""
 
 die() {
   echo "$*" >&2
   exit 1
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
 }
 
 cleanup() {
@@ -36,8 +41,11 @@ while (( $# > 0 )); do
     --clean|--clean-build)
       CLEAN_BUILD=1
       ;;
+    --remove-legacy-installs)
+      REMOVE_LEGACY_INSTALLS=1
+      ;;
     -h|--help)
-      echo "Usage: ${0:t} [--clean|--clean-build]"
+      echo "Usage: ${0:t} [--clean|--clean-build] [--remove-legacy-installs]"
       exit 0
       ;;
     *)
@@ -49,6 +57,13 @@ done
 
 [[ -f "$CMAKE_FILE" ]] || die "Missing CMake file: $CMAKE_FILE"
 [[ "$(uname -s)" == "Darwin" ]] || die "This installer is macOS-only."
+require_command cmake
+require_command codesign
+require_command otool
+require_command install_name_tool
+require_command ditto
+require_command mktemp
+require_command uname
 
 PROJECT_NAME=$(sed -nE 's/^[[:space:]]*project[[:space:]]*\([[:space:]]*([^[:space:])]+).*$/\1/p' "$CMAKE_FILE" | head -n 1)
 PROJECT_VERSION=$(sed -nE 's/^[[:space:]]*project[[:space:]]*\([^)]*VERSION[[:space:]]+([0-9]+(\.[0-9]+)*).*$/\1/p' "$CMAKE_FILE" | head -n 1)
@@ -81,6 +96,7 @@ echo "Project dir:      $PROJECT_DIR"
 echo "Build dir:        $BUILD_DIR"
 echo "Build target:     $TARGET_NAME"
 echo "Clean build:      $CLEAN_BUILD"
+echo "Arch:             $ARCH"
 echo "Plugin name:      $PLUGIN_PRODUCT_NAME"
 echo "Cleanup names:    ${(j:, :)cleanup_names}"
 echo "Install location: $INSTALLED_BUNDLE"
@@ -128,13 +144,21 @@ fi
 codesign --force --deep --sign - "$STAGED_BUNDLE"
 
 old_installs=()
-for name in "${cleanup_names[@]}"; do
-  old_installs+=(
-    "$VST3_DIR/${name} v"*.vst3(N)
-    "$VST3_DIR/${name}.vst3"(N)
-  )
-done
-old_installs+=("$VST3_DIR/latentSynthV2.vst3"(N))
+if [[ -e "$INSTALLED_BUNDLE" ]]; then
+  old_installs+=("$INSTALLED_BUNDLE")
+fi
+
+case "${REMOVE_LEGACY_INSTALLS:l}" in
+  1|true|yes|on)
+    for name in "${cleanup_names[@]}"; do
+      old_installs+=(
+        "$VST3_DIR/${name} v"*.vst3(N)
+        "$VST3_DIR/${name}.vst3"(N)
+      )
+    done
+    old_installs+=("$VST3_DIR/latentSynthV2.vst3"(N))
+    ;;
+esac
 
 if (( ${#old_installs[@]} )); then
   echo "Removing existing installs:"
@@ -149,13 +173,19 @@ otool -l "$INSTALLED_BINARY" | grep -A2 LC_RPATH || true
 codesign --verify --deep --strict --verbose=2 "$INSTALLED_BUNDLE"
 
 installed_matches=()
-for name in "${cleanup_names[@]}"; do
-  installed_matches+=(
-    "$VST3_DIR/${name} v"*.vst3(N)
-    "$VST3_DIR/${name}.vst3"(N)
-  )
-done
-installed_matches+=("$VST3_DIR/latentSynthV2.vst3"(N))
+installed_matches+=("$INSTALLED_BUNDLE"(N))
+
+case "${REMOVE_LEGACY_INSTALLS:l}" in
+  1|true|yes|on)
+    for name in "${cleanup_names[@]}"; do
+      installed_matches+=(
+        "$VST3_DIR/${name} v"*.vst3(N)
+        "$VST3_DIR/${name}.vst3"(N)
+      )
+    done
+    installed_matches+=("$VST3_DIR/latentSynthV2.vst3"(N))
+    ;;
+esac
 
 echo "Installed tracked bundles:"
 if (( ${#installed_matches[@]} )); then

@@ -3,6 +3,7 @@ project(rave-vst VERSION 0.0.5)
 set (target_name ${PROJECT_NAME})
 set (plugin_display_name "Latent Synth")
 set (plugin_product_name "${plugin_display_name} v${PROJECT_VERSION}")
+set (juce_version "6.1.6")
 
 ##### Compilation options
 if(NOT CMAKE_BUILD_TYPE)
@@ -58,8 +59,24 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 ##### Juce related
 option(JUCE_BUILD_EXTRAS "Build JUCE Extras" OFF)
 option(JUCE_BUILD_EXAMPLES "Build JUCE Examples" OFF)
-# As we're getting JUCE via git submodules and not using a possible system JUCE
-add_subdirectory(juce)
+option(LATENT_SYNTH_USE_LOCAL_JUCE
+       "Use a local JUCE checkout at rave_vst_latent_synth/juce when available"
+       ON)
+
+if (LATENT_SYNTH_USE_LOCAL_JUCE AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/juce/CMakeLists.txt")
+  message(STATUS "Using local JUCE checkout from ${CMAKE_CURRENT_SOURCE_DIR}/juce")
+  add_subdirectory(juce)
+else()
+  include(FetchContent)
+  message(STATUS "Fetching JUCE ${juce_version} because no local JUCE checkout is available")
+  FetchContent_Declare(
+    juce
+    GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
+    GIT_TAG ${juce_version}
+    GIT_SHALLOW TRUE
+  )
+  FetchContent_MakeAvailable(juce)
+endif()
 
 ##### `juce_add_console_app` adds an executable target with the name passed as the first argument
 # (ConsoleAppExample here). This target is a normal CMake target, but has a lot of extra properties
