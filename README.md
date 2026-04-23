@@ -14,12 +14,12 @@ You can also train and export your own models from the official RAVE repository:
 
 https://github.com/acids-ircam/RAVE
 
+## What It Is
+
 This repository combines two main layers:
 
 - `rave_vst_latent_synth/`: the C++ plugin and audio engine
 - `UI_p5js/Latent_Synth_UI/`: the p5.js web UI that is bundled into the plugin
-
-## What It Is
 
 At a high level, this project turns RAVE into a playable, interactive latent-space instrument/effect:
 
