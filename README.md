@@ -263,14 +263,6 @@ EP-491/
     └── source/
 ```
 
-## Publication Notes
-
-If you publish this repository as a portfolio project, the recommended public distribution model is:
-
-- keep this repo as the source repository
-- use GitHub Releases to publish prebuilt `.vst3` bundles for end users
-- keep `install_vst3_dev.sh` as the developer-oriented install path
-
 ## License
 
 The source code in this repository is released under the MIT License. See [LICENSE](/Users/likejie/Documents/GitHub/EP-491/LICENSE).
