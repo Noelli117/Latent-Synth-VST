@@ -73,7 +73,10 @@ void LatentFlowController::simulateFrame() {
   float sumVY = 0.0f;
   float sumPX = 0.0f;
   float sumPY = 0.0f;
+  float sumPX2 = 0.0f;
+  float sumPY2 = 0.0f;
   float sumNoise = 0.0f;
+  float sumNoise2 = 0.0f;
   float sumCos = 0.0f;
   float sumSin = 0.0f;
   float sumDriveMag = 0.0f;
@@ -102,7 +105,10 @@ void LatentFlowController::simulateFrame() {
     sumVY += vy;
     sumPX += particle.x;
     sumPY += particle.y;
+    sumPX2 += particle.x * particle.x;
+    sumPY2 += particle.y * particle.y;
     sumNoise += n;
+    sumNoise2 += n * n;
     sumCos += tx * invMagnitude;
     sumSin += ty * invMagnitude;
 
@@ -127,7 +133,21 @@ void LatentFlowController::simulateFrame() {
   const float avgX = sumPX * invNum;
   const float avgY = sumPY * invNum;
   const float avgNoise = sumNoise * invNum;
+  const float varX = std::max(0.0f, sumPX2 * invNum - avgX * avgX);
+  const float varY = std::max(0.0f, sumPY2 * invNum - avgY * avgY);
+  const float noiseVar =
+      std::max(0.0f, sumNoise2 * invNum - avgNoise * avgNoise);
+  const float spreadX = std::sqrt(varX) / (kCanvasWidth * 0.5f);
+  const float spreadY = std::sqrt(varY) / (kCanvasHeight * 0.5f);
+  const float spreadNorm =
+      juce::jlimit(0.0f, 1.0f, (spreadX + spreadY) * 0.5f);
+  const float noiseVarNorm = juce::jlimit(0.0f, 1.0f, noiseVar / 0.08f);
   const float avgAngle = std::atan2(sumSin * invNum, sumCos * invNum);
+
+  const float intensityDrive =
+      std::pow(juce::jlimit(0.0f, 1.0f, intensity), 0.55f);
+  rTarget += intensityDrive * (spreadNorm * 2.2f + noiseVarNorm * 1.6f);
+  rTarget = juce::jlimit(kLatentRadiusMin, kLatentRadiusMax, rTarget);
 
   std::array<float, kLatentDim> direction{};
   direction[0] = map(avgX, 0.0f, kCanvasWidth, -1.0f, 1.0f);
@@ -136,8 +156,8 @@ void LatentFlowController::simulateFrame() {
   direction[3] = avgAngle / kPi;
   direction[4] = map(meanVX, -safeS, safeS, -1.0f, 1.0f);
   direction[5] = map(meanVY, -safeS, safeS, -1.0f, 1.0f);
-  direction[6] = map(speed, 0.0f, 10.0f, -1.0f, 1.0f);
-  direction[7] = map(curviness, 0.5f, 4.0f, -1.0f, 1.0f);
+  direction[6] = map(spreadNorm, 0.0f, 1.0f, -1.0f, 1.0f);
+  direction[7] = map(noiseVarNorm, 0.0f, 1.0f, -1.0f, 1.0f);
 
   float norm = 0.0f;
   for (float value : direction) {
@@ -153,13 +173,22 @@ void LatentFlowController::simulateFrame() {
                    (intensity - kTemporalJitterOnset) /
                        (1.0f - kTemporalJitterOnset));
   const float motionJitterAmount =
-      intensity * motionNorm * 0.6f * temporalJitterMix;
-  const float latentNoiseAmount = intensity * kLatentNoiseMax;
-  const float noiseSpeed = lerp(0.03f, 0.6f, intensity);
+      intensityDrive * motionNorm * 0.85f * temporalJitterMix;
+  const float latentNoiseAmount =
+      std::pow(juce::jlimit(0.0f, 1.0f, intensity), 0.48f) *
+      kLatentNoiseMax;
+  const float noiseSpeed = lerp(0.04f, 0.75f, intensityDrive);
+  const float lfoAmount = lerp(0.18f, 0.7f, intensityDrive) *
+                          lerp(0.4f, 1.0f, motionNorm);
 
   for (size_t i = 0; i < kLatentDim; ++i) {
     const float global = rTarget * _directionUnit[i];
     _targetLatent[i] = global;
+
+    const float lfoRate = 0.07f + 0.035f * (float)i;
+    const float lfoPhase = 1.618f * (float)i;
+    _targetLatent[i] +=
+        lfoAmount * std::sin(_timeSeconds * 2.0f * kPi * lfoRate + lfoPhase);
 
     const float temporalJitter =
         (sampleNoise2D(_timeSeconds * 1.2f, (float)i * 31.7f) - 0.5f) * 2.0f;

@@ -47,8 +47,8 @@ private:
   static constexpr int kMaxParticles = 320;
   static constexpr float kLatentRadiusMin = 0.05f;
   static constexpr float kLatentRadiusMax = 8.0f;
-  static constexpr float kLatentNoiseMax = 4.0f;
-  static constexpr float kTemporalJitterOnset = 0.6f;
+  static constexpr float kLatentNoiseMax = 4.6f;
+  static constexpr float kTemporalJitterOnset = 0.35f;
   static constexpr float kCanvasWidth = 1000.0f;
   static constexpr float kCanvasHeight = 700.0f;
   static constexpr float kReferenceFrameRate = 60.0f;

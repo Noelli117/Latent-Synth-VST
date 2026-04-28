@@ -30,12 +30,10 @@ RaveAP::RaveAP()
   _dryWetValue = _avts.getRawParameterValue(rave_parameters::output_drywet);
   _limitValue = _avts.getRawParameterValue(rave_parameters::output_limit);
   _usePrior = _avts.getRawParameterValue(rave_parameters::use_prior);
-  _latentScale = new std::array<std::atomic<float> *, AVAILABLE_DIMS>;
-  _latentBias = new std::array<std::atomic<float> *, AVAILABLE_DIMS>;
   for (unsigned long i = 0; i < AVAILABLE_DIMS; i++) {
-    (*_latentScale)[i] = _avts.getRawParameterValue(
+    _latentScale[i] = _avts.getRawParameterValue(
         rave_parameters::latent_scale + String("_") + std::to_string(i));
-    (*_latentBias)[i] = _avts.getRawParameterValue(
+    _latentBias[i] = _avts.getRawParameterValue(
         rave_parameters::latent_bias + String("_") + std::to_string(i));
   }
   _latencyMode = _avts.getRawParameterValue(rave_parameters::latency_mode);
@@ -152,7 +150,7 @@ AudioProcessorValueTreeState::ParameterLayout RaveAP::createParameterLayout() {
   params.push_back(std::make_unique<NAAudioParameterInt>(
       rave_parameters::latency_mode, rave_parameters::latency_mode, 9, 15, 13));
   params.push_back(std::make_unique<AudioParameterBool>(
-      rave_parameters::use_prior, rave_parameters::use_prior, true));
+      rave_parameters::use_prior, rave_parameters::use_prior, false));
   params.push_back(std::make_unique<AudioParameterFloat>(
       rave_parameters::prior_temperature, rave_parameters::prior_temperature,
       0.f, 5.f, 1.f));
@@ -200,7 +198,7 @@ float RaveAP::getExternalLatentValue(size_t index) const {
 }
 
 void RaveAP::setLatentScaleValue(size_t index, float value) {
-  if (index >= AVAILABLE_DIMS || _latentScale == nullptr) {
+  if (index >= AVAILABLE_DIMS) {
     return;
   }
   const float clamped =
@@ -212,7 +210,7 @@ void RaveAP::setLatentScaleValue(size_t index, float value) {
 }
 
 void RaveAP::setLatentBiasValue(size_t index, float value) {
-  if (index >= AVAILABLE_DIMS || _latentBias == nullptr) {
+  if (index >= AVAILABLE_DIMS) {
     return;
   }
   const float clamped =
@@ -224,17 +222,17 @@ void RaveAP::setLatentBiasValue(size_t index, float value) {
 }
 
 float RaveAP::getLatentScaleValue(size_t index) const {
-  if (index >= AVAILABLE_DIMS || _latentScale == nullptr) {
+  if (index >= AVAILABLE_DIMS) {
     return 1.0f;
   }
-  return (*_latentScale)[index]->load();
+  return _latentScale[index]->load();
 }
 
 float RaveAP::getLatentBiasValue(size_t index) const {
-  if (index >= AVAILABLE_DIMS || _latentBias == nullptr) {
+  if (index >= AVAILABLE_DIMS) {
     return 0.0f;
   }
-  return (*_latentBias)[index]->load();
+  return _latentBias[index]->load();
 }
 
 void RaveAP::setWebUiFlowSpeed(float value) {

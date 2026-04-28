@@ -187,8 +187,8 @@ private:
   std::atomic<float> *_usePrior;
   std::atomic<float> *_priorTemperature;
 
-  std::array<std::atomic<float> *, AVAILABLE_DIMS> *_latentScale;
-  std::array<std::atomic<float> *, AVAILABLE_DIMS> *_latentBias;
+  std::array<std::atomic<float> *, AVAILABLE_DIMS> _latentScale{};
+  std::array<std::atomic<float> *, AVAILABLE_DIMS> _latentBias{};
   std::atomic<bool> _externalLatentMode{false};
   std::array<std::atomic<float>, AVAILABLE_DIMS> _externalLatentValues;
   LatentFlowController _latentFlowController;

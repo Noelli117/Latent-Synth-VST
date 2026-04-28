@@ -58,6 +58,7 @@ juce::StringArray getNativeFoldParamIds() {
       rave_parameters::output_gain,  rave_parameters::output_drywet,
       rave_parameters::output_limit, rave_parameters::latency_mode,
       rave_parameters::latent_jitter, rave_parameters::output_width,
+      rave_parameters::use_prior,
   };
 }
 

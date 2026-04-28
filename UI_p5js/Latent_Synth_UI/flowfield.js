@@ -5,7 +5,6 @@ let explorerOpen = false;
 let explorerPanel;
 let explorerStatusLabel;
 let localModelSelect;
-let onlineModelSelect;
 let hostReqCounter = 1;
 let nativeFoldButton;
 let nativeFoldPanel;
@@ -28,7 +27,6 @@ const FORCED_NAV_ACTIONS = new Set([
   "list_models",
   "select_model",
   "import_model",
-  "download_model",
 ]);
 let hostStreamSeq = 1;
 let lastSentMode = "";
@@ -38,6 +36,7 @@ let lastSentLatentJitter = NaN;
 let lastSentStereoWidth = NaN;
 let hostLatentStateHydrated = false;
 let nativeFoldParamsHydrated = false;
+let hostModeDirty = false;
 
 let scale = new Array(LATENT_DIM).fill(1);
 let bias = new Array(LATENT_DIM).fill(0);
@@ -60,7 +59,7 @@ const EPSILON = 0.000001; // Prevent division by zero
 const PARTICLE_STROKE_ALPHA = 190;
 const TRAIL_DEFOG_ALPHA = 10;
 const MOLD_LAYER_SCALE = 1.0;
-const MOLD_BASE_COUNT = 2800;
+const MOLD_BASE_COUNT = 1200;
 const MOLD_FADE_ALPHA = 8;
 const MOLD_BG_ALPHA = 235;
 const KNOB_LABEL_SIZE = 13;
@@ -207,31 +206,31 @@ function drawNativeMoldBackground() {
   const latentNoiseNorm = map(constrain(latentNoiseAmount, 0, 3), 0, 3, 0, 1);
 
   // Each latent pair controls one visual behavior family in native mode.
-  const speedScale = map(constrain(scale[0], 0, 5), 0, 5, 0.55, 2.6);
-  const headingDrift = map(constrain(bias[0], -3, 3), -3, 3, -0.09, 0.09);
+  const speedScale = map(constrain(scale[0], 0, 5), 0, 5, 0.55, 2.0);
+  const angularBias = map(constrain(bias[0], -3, 3), -15.0, 15.0, -pi * 0.2, pi * 0.2);
 
-  const sensorDist = map(constrain(scale[1], 0, 5), 0, 5, 4, 22);
-  const baseSensorAngle = map(constrain(bias[1], -3, 3), -3, 3, pi / 16, pi / 1.85);
-  const sensorAngle = constrain(baseSensorAngle + stereoWidthNorm * (pi / 10), pi / 20, pi / 1.5);
+  const sensorDist = map(constrain(scale[1], 0, 5), 0, 5, 4, 10);
+  const baseSensorAngle = map(constrain(bias[1], -3, 3), -3, 3, pi / 100, pi / 1.6);
+  const sensorAngle = constrain(baseSensorAngle + stereoWidthNorm * (pi / 16), pi / 9, pi / 2.1);
 
   const turnAngle = map(constrain(scale[2], 0, 5), 0, 5, pi / 20, pi / 2.4);
   const jitter = map(constrain(Math.abs(bias[2]), 0, 3), 0, 3, 0, pi / 10) +
     map(constrain(latentNoiseAmount, 0, 3), 0, 3, 0, pi / 8);
 
   const fadeAlpha = constrain(
-    map(constrain(scale[3], 0, 5), 0, 5, 10, 1.0) - latentNoiseNorm * 2.5,
-    1.0,
-    14
+    map(constrain(scale[3], 0, 5), 0, 5, 2.6, 0.12) - latentNoiseNorm * 0.25,
+    0.05,
+    3.0
   );
   const bgAlpha = map(constrain(bias[3], -3, 3), -3, 3, 255, 205);
 
-  const densityFromLatent = map(constrain(scale[4], 0, 5), 0, 5, MOLD_BASE_COUNT * 0.35, MOLD_BASE_COUNT);
+  const densityFromLatent = map(constrain(scale[4], 0, 5), 0, 5, MOLD_BASE_COUNT * 0.22, MOLD_BASE_COUNT);
   const activeCount = floor(min(MOLD_BASE_COUNT,
     densityFromLatent * map(constrain(intensity, 0.3, 1.0), 0.3, 1.0, 0.88, 1.0)
   ));
   const depositAlpha = map(constrain(bias[4], -3, 3), -3, 3, 190, 255);
 
-  const radius = map(constrain(scale[5], 0, 5), 0, 5, 0.35, 1.8);
+  const radius = map(constrain(scale[5], 0, 5), 0, 5, 0.55, 2.3);
   const centerForce = map(constrain(bias[5], -3, 3), -3, 3, -0.035, 0.035);
 
   const anisotropyAmount = map(constrain(scale[6], 0, 5), 0, 5, 0, 0.65);
@@ -258,7 +257,7 @@ function drawNativeMoldBackground() {
     moldAgents[i].rotAngle = turnAngle;
     moldAgents[i].update(moldLayer, {
       speedScale,
-      headingDrift,
+      headingDrift: angularBias / 4.5,
       jitter,
       centerForce,
       xStretch,
@@ -285,14 +284,7 @@ class MoldAgent {
   constructor(boundsWidth, boundsHeight) {
     this.boundsWidth = boundsWidth;
     this.boundsHeight = boundsHeight;
-
-    this.x = random(boundsWidth);
-    this.y = random(boundsHeight);
     this.r = 0.55;
-
-    this.heading = random(TWO_PI);
-    this.vx = cos(this.heading);
-    this.vy = sin(this.heading);
     this.rotAngle = pi / 4;
 
     this.rSensorPos = createVector(0, 0);
@@ -300,6 +292,26 @@ class MoldAgent {
     this.fSensorPos = createVector(0, 0);
     this.sensorAngle = pi / 4;
     this.sensorDist = 10;
+    this.heading = 0;
+    this.vx = 0;
+    this.vy = 0;
+    this.respawnFromCenter();
+  }
+
+  respawnFromCenter() {
+    const centerX = this.boundsWidth * 0.5;
+    const centerY = this.boundsHeight * 0.5;
+    const spawnRadius = min(this.boundsWidth, this.boundsHeight) * 0.035;
+    const spawnAngle = random(TWO_PI);
+    const spawnDistance = random(spawnRadius);
+
+    this.x = centerX + cos(spawnAngle) * spawnDistance;
+    this.y = centerY + sin(spawnAngle) * spawnDistance;
+
+    const outwardAngle = atan2(this.y - centerY, this.x - centerX);
+    this.heading = outwardAngle + random(-pi / 8, pi / 8);
+    this.vx = cos(this.heading);
+    this.vy = sin(this.heading);
   }
 
   update(layer, config) {
@@ -319,8 +331,12 @@ class MoldAgent {
     this.vx = cos(this.heading) * config.speedScale * config.xStretch;
     this.vy = sin(this.heading) * config.speedScale * config.yStretch;
 
-    this.x = (this.x + this.vx + this.boundsWidth) % this.boundsWidth;
-    this.y = (this.y + this.vy + this.boundsHeight) % this.boundsHeight;
+    this.x += this.vx;
+    this.y += this.vy;
+
+    if (this.x < 0 || this.x >= this.boundsWidth || this.y < 0 || this.y >= this.boundsHeight) {
+      this.respawnFromCenter();
+    }
 
     this.getSensorPos(this.rSensorPos, this.heading + this.sensorAngle);
     this.getSensorPos(this.lSensorPos, this.heading - this.sensorAngle);
@@ -348,8 +364,8 @@ class MoldAgent {
   }
 
   getSensorPos(sensor, angle) {
-    sensor.x = (this.x + this.sensorDist * cos(angle) + this.boundsWidth) % this.boundsWidth;
-    sensor.y = (this.y + this.sensorDist * sin(angle) + this.boundsHeight) % this.boundsHeight;
+    sensor.x = constrain(this.x + this.sensorDist * cos(angle), 0, this.boundsWidth - 1);
+    sensor.y = constrain(this.y + this.sensorDist * sin(angle), 0, this.boundsHeight - 1);
   }
 }
 
@@ -446,19 +462,6 @@ function fillLocalModelSelect(localModels, selectedPath = "") {
   }
 }
 
-function fillOnlineModelSelect(onlineModels) {
-  onlineModelSelect.elt.innerHTML = "";
-  if (!onlineModels || onlineModels.length === 0) {
-    onlineModelSelect.option("(no online models)", "");
-    onlineModelSelect.value("");
-    return;
-  }
-  for (let i = 0; i < onlineModels.length; i++) {
-    onlineModelSelect.option(onlineModels[i], onlineModels[i]);
-  }
-  onlineModelSelect.selected(onlineModelSelect.elt.options[0].value);
-}
-
 function requestAndPopulateModels() {
   setExplorerStatus("Refreshing model list...");
   const req = sendHostAction("list_models");
@@ -467,10 +470,8 @@ function requestAndPopulateModels() {
     loadHostModelsFile((data) => {
       if (data && (!req || !data.req || data.req === req)) {
         const local = Array.isArray(data.localModels) ? data.localModels : [];
-        const online = Array.isArray(data.onlineModels) ? data.onlineModels : [];
         fillLocalModelSelect(local, data.selectedPath || "");
-        fillOnlineModelSelect(online);
-        setExplorerStatus(`Local: ${local.length} | Online: ${online.length}`);
+        setExplorerStatus(`Local: ${local.length}`);
         return;
       }
 
@@ -480,13 +481,10 @@ function requestAndPopulateModels() {
         const stale = window.__hostModels || null;
         if (stale) {
           const local = Array.isArray(stale.localModels) ? stale.localModels : [];
-          const online = Array.isArray(stale.onlineModels) ? stale.onlineModels : [];
           fillLocalModelSelect(local, stale.selectedPath || "");
-          fillOnlineModelSelect(online);
-          setExplorerStatus(`Local: ${local.length} | Online: ${online.length} (stale)`);
+          setExplorerStatus(`Local: ${local.length} (stale)`);
         } else {
           fillLocalModelSelect([], "");
-          fillOnlineModelSelect([]);
           setExplorerStatus("Model list refresh timed out.");
         }
       }
@@ -551,37 +549,6 @@ function createModelExplorerPanel() {
     setExplorerStatus("Opening file picker...");
     sendHostAction("import_model");
     setTimeout(requestAndPopulateModels, 800);
-  });
-
-  const sep = createDiv("");
-  sep.parent(explorerPanel);
-  sep.style("height", "1px");
-  sep.style("background", "rgba(255,255,255,0.25)");
-  sep.style("margin", "10px 0");
-
-  const onlineLabel = createDiv("Official Models");
-  onlineLabel.parent(explorerPanel);
-  onlineLabel.style("font-size", "12px");
-  onlineLabel.style("margin-bottom", "4px");
-
-  onlineModelSelect = createSelect();
-  onlineModelSelect.parent(explorerPanel);
-  onlineModelSelect.style("width", "100%");
-  onlineModelSelect.style("margin-bottom", "8px");
-  onlineModelSelect.option("(loading...)", "");
-
-  const downloadBtn = createButton("Download Official");
-  downloadBtn.parent(explorerPanel);
-  downloadBtn.mousePressed(() => {
-    const selectedName = onlineModelSelect.value();
-    if (!selectedName) {
-      setExplorerStatus("No online model selected.");
-      return;
-    }
-    setExplorerStatus("Downloading model...");
-    sendHostAction("download_model", { name: selectedName });
-    setExplorerStatus("Download request sent.");
-    setTimeout(requestAndPopulateModels, 700);
   });
 
   const refreshBtn = createButton("Refresh");
@@ -814,26 +781,6 @@ function createNativeFoldablePanel() {
   title.style("font-size", "12px");
   title.style("margin-bottom", "8px");
 
-  const inputBody = addNativeFoldSection("Input Parameters");
-  addNativeFoldSlider(inputBody, {
-    id: "input_gain", label: "Gain (dB)",
-    min: -70, max: 12, step: 0.1, defaultValue: 0, decimals: 1,
-  });
-  addNativeFoldSelect(inputBody, {
-    id: "channel_mode", label: "Channel mode",
-    options: [{ label: "L", value: 1 }, { label: "R", value: 2 }, { label: "L + R", value: 3 }],
-  });
-
-  const compBody = addNativeFoldSection("Compressor Parameters");
-  addNativeFoldSlider(compBody, {
-    id: "input_thresh", label: "Threshold (dB)",
-    min: -60, max: 0, step: 0.1, defaultValue: 0, decimals: 1,
-  });
-  addNativeFoldSlider(compBody, {
-    id: "input_ratio", label: "Ratio (:1)",
-    min: 1, max: 10, step: 0.1, defaultValue: 1, decimals: 1,
-  });
-
   const outputBody = addNativeFoldSection("Output Parameters");
   addNativeFoldSlider(outputBody, {
     id: "output_gain", label: "Gain (dB)",
@@ -845,6 +792,11 @@ function createNativeFoldablePanel() {
   });
   addNativeFoldToggle(outputBody, {
     id: "output_limit", label: "Limit", defaultValue: true,
+  });
+
+  const modelBody = addNativeFoldSection("Model Parameters");
+  addNativeFoldToggle(modelBody, {
+    id: "use_prior", label: "Use Prior", defaultValue: false,
   });
 
   const fftBody = addNativeFoldSection("Window Size");
@@ -882,6 +834,22 @@ function getFlowKnobs() {
 
 function getLatentKnobPairs() {
   return latentKnobPairs;
+}
+
+function areFlowKnobsDragging() {
+  const knobs = getFlowKnobs();
+  for (let i = 0; i < knobs.length; i++) {
+    if (knobs[i].dragging) return true;
+  }
+  return false;
+}
+
+function areNativeLatentKnobsDragging() {
+  const pairs = getLatentKnobPairs();
+  for (let i = 0; i < pairs.length; i++) {
+    if (pairs[i][0].dragging || pairs[i][1].dragging) return true;
+  }
+  return false;
 }
 
 function updateLatentArraysFromKnobs() {
@@ -948,6 +916,7 @@ function setup() {
   styleTopButton(modebutton);
   attachTopButtonInteraction(modebutton, () => {
     uiMode = (uiMode + 1) % 2;
+    hostModeDirty = true;
   });
 
   explorerButton = createButton("Model Explorer");
@@ -981,7 +950,8 @@ function setup() {
 
   knobFlowGain = new Knob(900, 125, 40, 0.01, 0.3, 0.155, true, 0.75);
   knobContrast = new Knob(900, 325, 40, 0, 0.95, 0.475, true, 5.0);
-  knobIntensity = new Knob(900, 525, 40, 0.3, 1.0, 0.65, true, 5.0);
+  knobIntensity = new Knob(900, 525, 40, 0.3, 1.0, 0.65, true, 0.45);
+  knobIntensity.setValue(0.65);
   knobLatentNoise = new Knob(430, 600, 35, 0, 3, 0, true, 1.0);
   knobStereoWidth = new Knob(570, 600, 35, 0, 200, 100, true, 1.0);
   
@@ -1127,6 +1097,17 @@ function pushLatentToHost(scaleValues, biasValues) {
   if (!HOST_BRIDGE_ENABLED || !hostLatentStateHydrated) return;
   const isGlobalMode = (uiMode === 0);
   const mode = isGlobalMode ? "global" : "native";
+  const modeChanged = hostModeDirty || lastSentMode !== mode;
+  const flowDragging = isGlobalMode && areFlowKnobsDragging();
+  const nativeDragging = !isGlobalMode && areNativeLatentKnobsDragging();
+  const nativeDelta = !isGlobalMode && (
+    hasArrayDelta(scaleValues, lastSentScale, HOST_PUSH_DEADBAND) ||
+    hasArrayDelta(biasValues, lastSentBias, HOST_PUSH_DEADBAND)
+  );
+
+  if (!modeChanged && !flowDragging && !(nativeDragging && nativeDelta)) {
+    return;
+  }
 
   const params = new URLSearchParams();
   params.set("action", "latent_stream");
@@ -1151,14 +1132,16 @@ function pushLatentToHost(scaleValues, biasValues) {
 
   hostStreamSeq += 1;
   lastSentMode = mode;
+  hostModeDirty = false;
   if (!isGlobalMode) {
     copyArrayValues(lastSentScale, scaleValues);
     copyArrayValues(lastSentBias, biasValues);
   }
 }
 
-function commitNativeBottomKnobsToHost() {
+function commitNativeBottomKnobsToHost(force = false) {
   if (!HOST_BRIDGE_ENABLED || uiMode !== 1 || !nativeFoldParamsHydrated) return;
+  if (!force && !knobLatentNoise.dragging && !knobStereoWidth.dragging) return;
   const latentJitterValue = knobLatentNoise.value;
   const stereoWidthValue = knobStereoWidth.value;
 
@@ -1404,5 +1387,5 @@ function mouseReleased() {
   }
   knobLatentNoise.released();
   knobStereoWidth.released();
-  commitNativeBottomKnobsToHost();
+  commitNativeBottomKnobsToHost(true);
 }

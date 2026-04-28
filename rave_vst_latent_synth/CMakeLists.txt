@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(rave-vst VERSION 0.0.5)
+project(rave-vst VERSION 0.1.5)
 set (target_name ${PROJECT_NAME})
 set (plugin_display_name "Latent Synth")
 set (plugin_product_name "${plugin_display_name} v${PROJECT_VERSION}")

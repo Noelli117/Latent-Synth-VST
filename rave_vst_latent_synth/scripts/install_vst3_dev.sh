@@ -46,6 +46,14 @@ while (( $# > 0 )); do
       ;;
     -h|--help)
       echo "Usage: ${0:t} [--clean|--clean-build] [--remove-legacy-installs]"
+      echo
+      echo "Default behavior:"
+      echo "  - rebuilds the plugin"
+      echo "  - replaces the current versioned install"
+      echo "  - removes older installs matching '${PLUGIN_DISPLAY_NAME} v*.vst3'"
+      echo
+      echo "Optional behavior:"
+      echo "  --remove-legacy-installs  Also removes older non-versioned/legacy bundle names."
       exit 0
       ;;
     *)
@@ -144,9 +152,11 @@ fi
 codesign --force --deep --sign - "$STAGED_BUNDLE"
 
 old_installs=()
-if [[ -e "$INSTALLED_BUNDLE" ]]; then
-  old_installs+=("$INSTALLED_BUNDLE")
-fi
+typeset -U old_installs
+old_installs+=(
+  "$VST3_DIR/${PLUGIN_DISPLAY_NAME} v"*.vst3(N)
+  "$VST3_DIR/${PLUGIN_DISPLAY_NAME}.vst3"(N)
+)
 
 case "${REMOVE_LEGACY_INSTALLS:l}" in
   1|true|yes|on)
@@ -173,7 +183,11 @@ otool -l "$INSTALLED_BINARY" | grep -A2 LC_RPATH || true
 codesign --verify --deep --strict --verbose=2 "$INSTALLED_BUNDLE"
 
 installed_matches=()
-installed_matches+=("$INSTALLED_BUNDLE"(N))
+typeset -U installed_matches
+installed_matches+=(
+  "$VST3_DIR/${PLUGIN_DISPLAY_NAME} v"*.vst3(N)
+  "$VST3_DIR/${PLUGIN_DISPLAY_NAME}.vst3"(N)
+)
 
 case "${REMOVE_LEGACY_INSTALLS:l}" in
   1|true|yes|on)

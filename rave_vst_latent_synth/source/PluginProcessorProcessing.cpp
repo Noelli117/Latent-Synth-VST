@@ -5,6 +5,10 @@
 
 #define DEBUG_PERFORM 0
 
+namespace {
+constexpr float kInputRmsMuteThreshold = 0.000316f; // roughly -70 dBFS
+}
+
 void RaveAP::modelPerform() {
   auto *rave = _rave.get();
   if (rave != nullptr && !_isMuted.load()) {
@@ -12,6 +16,26 @@ void RaveAP::modelPerform() {
     c10::InferenceMode guard(true);
     // encode
     int input_size = static_cast<int>(pow(2, *_latencyMode));
+
+    const bool useExternalLatent = _externalLatentMode.load();
+    if (!useExternalLatent && !static_cast<bool>(*_usePrior)) {
+      double sumSquares = 0.0;
+      const auto frameSize = static_cast<size_t>(input_size);
+      for (size_t i = 0; i < frameSize; ++i) {
+        const float sample = _inModel[0][i];
+        sumSquares += static_cast<double>(sample) * sample;
+      }
+
+      const double inputMeanSquare = sumSquares / std::max(1, input_size);
+      const double muteMeanSquare =
+          static_cast<double>(kInputRmsMuteThreshold) *
+          kInputRmsMuteThreshold;
+      if (inputMeanSquare < muteMeanSquare) {
+        std::fill(_outModel[0].get(), _outModel[0].get() + input_size, 0.0f);
+        std::fill(_outModel[1].get(), _outModel[1].get() + input_size, 0.0f);
+        return;
+      }
+    }
 
     at::Tensor latent_traj;
     at::Tensor latent_traj_mean;
@@ -58,7 +82,6 @@ void RaveAP::modelPerform() {
 #endif
 
     // Latent modifications
-    const bool useExternalLatent = _externalLatentMode.load();
     if (useExternalLatent) {
       LatentFlowController::Params flowParams;
       flowParams.speed = _webUiFlowSpeed.load();
@@ -97,8 +120,8 @@ void RaveAP::modelPerform() {
         // Whatever AVAILABLE_DIMS type I defined
         assert(i >= 0);
         auto i2 = (long unsigned int)i;
-        float scale = _latentScale->at(i2)->load();
-        float bias = _latentBias->at(i2)->load();
+        float scale = _latentScale[i2]->load();
+        float bias = _latentBias[i2]->load();
         latent_traj.index_put_({0, i},
                                (latent_traj.index({0, i}) * scale + bias));
         latent_traj_mean.index_put_(

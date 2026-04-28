@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 
 using namespace juce;
 
@@ -29,18 +30,18 @@ public:
       // Biases
       String current_name =
           rave_parameters::latent_bias + String("_") + std::to_string(i);
-      SliderGroup *tmp = new SliderGroup(
+      auto tmp = std::make_unique<SliderGroup>(
           "Latent #" + std::to_string(i + 1) + " bias", "", current_name);
-      _biases.push_back(tmp);
-      addAndMakeVisible(_biases[i]);
+      addAndMakeVisible(*tmp);
+      _biases.push_back(std::move(tmp));
 
       // Scales
       current_name =
           rave_parameters::latent_scale + String("_") + std::to_string(i);
-      tmp = new SliderGroup("Latent #" + std::to_string(i + 1) + " scale", "",
-                            current_name);
-      _scales.push_back(tmp);
-      addAndMakeVisible(_scales[i]);
+      tmp = std::make_unique<SliderGroup>(
+          "Latent #" + std::to_string(i + 1) + " scale", "", current_name);
+      addAndMakeVisible(*tmp);
+      _scales.push_back(std::move(tmp));
 
       if (i == _selectedLatent) {
         _biases[i]->setVisible(true);
@@ -61,12 +62,6 @@ public:
 
   ~ModelPanel() {
     stopTimer();
-    for (size_t i = 0; i < _latentsNbr; i++) {
-      delete _biases[i];
-      delete _scales[i];
-    }
-    _biases.clear();
-    _scales.clear();
   }
 
   void connectVTS(AudioProcessorValueTreeState &vts) {
@@ -373,8 +368,8 @@ private:
   std::vector<float> _meanLatentValues;
   std::vector<std::vector<Point<float>>> _pointPositions;
 
-  std::vector<SliderGroup *> _biases;
-  std::vector<SliderGroup *> _scales;
+  std::vector<std::unique_ptr<SliderGroup>> _biases;
+  std::vector<std::unique_ptr<SliderGroup>> _scales;
 
   ToggleButton _togglePrior;
   std::unique_ptr<ButtonAttachment> _togglePriorAttachment;

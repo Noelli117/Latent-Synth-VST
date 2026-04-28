@@ -6,7 +6,9 @@ Latent Synth is a JUCE-based VST3/Standalone audio plugin built on top of a Torc
 
 Latent Synth is a host instrument/effect for TorchScript-exported RAVE models. The plugin itself does not ship with pretrained timbres or model files.
 
-To produce sound, you need to import a compatible `.ts` RAVE model into the plugin. You can download compatible pretrained models from IRCAM's RAVE model collection:
+To produce sound, you need to import a compatible `.ts` RAVE model into the plugin. The plugin UI does not download official models directly; download a compatible pretrained model outside the plugin first, then import the `.ts` file through `Model Explorer > Import .ts`.
+
+Compatible pretrained models are available from IRCAM's RAVE model collection:
 
 https://forum.ircam.fr/collections/detail/rave-model-challenge/
 
@@ -29,7 +31,49 @@ At a high level, this project turns RAVE into a playable, interactive latent-spa
 - latent values are modified in real time
 - the modified latent trajectory is decoded back to audio
 
-The plugin targets `VST3` and `Standalone`, and the current product name in CMake is `Latent Synth v0.0.5`.
+The plugin targets `VST3` and `Standalone`, and the current product name in CMake is `Latent Synth v0.1.5`.
+
+## Prebuilt VST3 Install
+
+This repo includes a prebuilt macOS Apple Silicon VST3 package:
+
+```text
+releases/macOS-arm64/Latent Synth v0.1.5 macOS-arm64 VST3.zip
+```
+
+Unzip it first. The extracted plugin bundle should be:
+
+```text
+Latent Synth v0.1.5.vst3
+```
+
+### macOS
+
+For a per-user install, copy or drag the extracted `.vst3` bundle into:
+
+```text
+~/Library/Audio/Plug-Ins/VST3
+```
+
+For an all-users install, copy it into:
+
+```text
+/Library/Audio/Plug-Ins/VST3
+```
+
+If the `VST3` folder does not exist, create it. Then restart or rescan plugins in your DAW.
+
+The included macOS build is `arm64` and is intended for Apple Silicon Macs. It is ad-hoc codesigned, not notarized.
+
+### Windows
+
+Windows cannot use the macOS `.vst3` bundle. Use a Windows-built `.vst3` package, then copy it into:
+
+```text
+C:\Program Files\Common Files\VST3
+```
+
+You may need administrator permission to write to that folder. After copying, restart or rescan plugins in your DAW.
 
 ## Architecture Origin: Based on RAVE
 
@@ -61,10 +105,12 @@ The largest change is the `LatentFlowController`, which generates an 8D latent c
 It derives latent movement from:
 
 - particle position statistics
+- particle spread across the control canvas
 - local 2D noise sampling
+- local noise variance
 - average flow direction
-- motion energy and radius
-- temporal jitter and smoothed stochastic motion
+- motion energy and a dynamically breathing latent radius
+- temporal jitter, per-dimension LFO motion, and smoothed stochastic motion
 
 That controller feeds a global/external latent mode in the audio engine, where the first 8 latent dimensions are driven directly by the evolving flow state.
 
@@ -103,17 +149,34 @@ Relevant files:
 - `rave_vst_latent_synth/source/PluginEditor.cpp`
 - `rave_vst_latent_synth/source/PluginEditorNetworking.cpp`
 
-### 4. Model management and persistent latent state
+### 4. Native-mode mold visualizer
+
+The p5.js UI also includes a mold/particle visualizer under native/timbre transform mode that responds to the current latent scale and bias controls. Recent tuning makes this background lighter-weight and more center-focused:
+
+- fewer active mold agents for lower CPU/GPU load
+- agents spawn near the center and respawn there after leaving the canvas
+- sensor and fade ranges are tuned for slower, more persistent trails
+- latent controls still shape speed, turning, density, radius, anisotropy, and stereo spread
+
+### 5. Model management and persistent latent state
 
 Compared with a minimal RAVE plugin, this repo also adds:
 
-- local model discovery/import
-- optional remote model listing/download support
+- local model discovery/import through the p5.js `Model Explorer`
 - persistent external latent state
 - persistent web-UI flow parameters
 - safer model/runtime handling around buffer updates and latent history writes
 
-### 5. Packaging work for libtorch on macOS
+The current `Model Explorer` panel is intentionally local-only. It exposes:
+
+- `Local Models`
+- `Load Selected`
+- `Import .ts`
+- `Refresh`
+
+Official model browsing/downloading is not exposed in the plugin UI.
+
+### 6. Packaging work for libtorch on macOS
 
 The build system bundles libtorch into the plugin and sets runtime paths so the plugin can find the shipped libraries from inside the VST3 bundle. The development install script also repairs rpaths, re-signs the bundle, and installs it into the user VST3 folder.
 
@@ -205,7 +268,7 @@ cmake --build build-arm64 --config Release --target rave-vst_VST3
 Expected VST3 artifact:
 
 ```text
-rave_vst_latent_synth/build-arm64/rave-vst_artefacts/Release/VST3/Latent Synth v0.0.5.vst3
+rave_vst_latent_synth/build-arm64/rave-vst_artefacts/Release/VST3/Latent Synth v0.1.5.vst3
 ```
 
 ### Build and install on macOS with the helper script
@@ -218,6 +281,8 @@ The repo includes a development installer that:
 - fixes/removes unwanted rpaths
 - codesigns the result
 - installs it to `~/Library/Audio/Plug-Ins/VST3`
+- replaces older installed bundles matching `Latent Synth v*.vst3`
+- removes the unversioned `Latent Synth.vst3` bundle if it exists
 
 This script is intended for developers building from source on macOS. It is not a one-click end-user installer.
 
@@ -235,7 +300,7 @@ cd rave_vst_latent_synth
 ./scripts/install_vst3_dev.sh --clean
 ```
 
-To also remove older legacy bundle names during install:
+By default, the installer removes prior versioned installs matching `Latent Synth v*.vst3` and the unversioned `Latent Synth.vst3` bundle. To also remove older legacy bundle names such as `latentSynthV2.vst3` or names listed in `LEGACY_PLUGIN_NAMES`, run:
 
 ```bash
 cd rave_vst_latent_synth
@@ -246,6 +311,10 @@ cd rave_vst_latent_synth
 
 - Models are expected as TorchScript `.ts` files.
 - The plugin creates a model directory under the user application data path and can import models there from the editor.
+- The p5.js `Model Explorer` panel only manages local models: load an already imported model, import a `.ts` file, or refresh the local model list.
+- `Use Prior` is now disabled by default, so new plugin instances encode the audio input instead of generating from `sample_prior()`.
+- To use the model prior instead, enable `Use Prior` from the p5.js `Audio Params > Model Parameters` section.
+- The p5.js `Audio Params` panel currently exposes only `Output Parameters`, `Model Parameters`, and `Window Size`.
 - In web-only mode, the p5.js latent controller becomes the primary interface.
 - The first 8 latent dimensions are the dimensions actively driven by the external flow controller.
 
@@ -254,6 +323,7 @@ cd rave_vst_latent_synth
 ```text
 EP-491/
 ├── README.md
+├── releases/            # prebuilt distributable plugin packages
 ├── UI_p5js/
 │   └── Latent_Synth_UI/
 └── rave_vst_latent_synth/
