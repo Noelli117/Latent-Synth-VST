@@ -3,6 +3,7 @@
 .LSOverride
 .vscode/
 *~
+Introduction Video Latenet Synth.mov
 
 rave_vst_latent_synth/build/
 rave_vst_latent_synth/build-*/

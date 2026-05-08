@@ -6,6 +6,15 @@ Latent Synth is a JUCE-based VST3/Standalone audio plugin built on top of a Torc
 
 For detailed technical background, system design, and implementation notes, see the included [Latent Synth Technical Report](Latent_Synth_Technical_Report.pdf).
 
+## Introduction Video
+
+For a visual overview and demonstration of the plugin, see the included [Latent Synth Introduction Video](Latent_Synth_Introduction_Video.mp4).
+
+The models used in the video demonstration are:
+
+- [Black Latents](https://forum.ircam.fr/projects/detail/black-latents/)
+- [Schizophrenia](https://forum.ircam.fr/projects/detail/schizophrenia/)
+
 ## Important
 
 Latent Synth is a host instrument/effect for TorchScript-exported RAVE models. The plugin itself does not ship with pretrained timbres or model files.
