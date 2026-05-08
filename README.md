@@ -88,110 +88,11 @@ C:\Program Files\Common Files\VST3
 
 You may need administrator permission to write to that folder. After copying, restart or rescan plugins in your DAW.
 
-## Architecture Origin: Based on RAVE
+## Technical Overview
 
-The core architecture is inherited from the original RAVE plugin approach:
+Latent Synth extends the original RAVE plugin architecture with flow-field-driven latent control, hybrid native/external latent editing modes, an embedded p5.js interface, local model management, and macOS libtorch packaging support.
 
-- JUCE handles plugin lifecycle, UI hosting, audio I/O, and parameter management
-- libtorch runs the exported TorchScript RAVE model inside the plugin
-- the audio engine follows a standard RAVE loop:
-  1. collect an input frame
-  2. run `encode()` or `sample_prior()`
-  3. modify the latent representation
-  4. run `decode()`
-  5. stream the result back to the host
-
-In this repo, that base architecture lives mainly in:
-
-- `rave_vst_latent_synth/source/Rave.h`
-- `rave_vst_latent_synth/source/PluginProcessor.cpp`
-- `rave_vst_latent_synth/source/PluginProcessorProcessing.cpp`
-
-## What This Repo Adds on Top of RAVE
-
-This is not just a direct RAVE wrapper. The main additions in this repo are:
-
-### 1. Flow-field-driven latent control
-
-The largest change is the `LatentFlowController`, which generates an 8D latent control signal from a particle flow simulation rather than relying only on static knob offsets.
-
-It derives latent movement from:
-
-- particle position statistics
-- particle spread across the control canvas
-- local 2D noise sampling
-- local noise variance
-- average flow direction
-- motion energy and a dynamically breathing latent radius
-- temporal jitter, per-dimension LFO motion, and smoothed stochastic motion
-
-That controller feeds a global/external latent mode in the audio engine, where the first 8 latent dimensions are driven directly by the evolving flow state.
-
-Relevant files:
-
-- `rave_vst_latent_synth/source/LatentFlowController.h`
-- `rave_vst_latent_synth/source/LatentFlowController.cpp`
-- `rave_vst_latent_synth/source/PluginProcessorProcessing.cpp`
-
-### 2. Hybrid latent editing modes
-
-The plugin supports two distinct ways of working in latent space:
-
-- `native` mode: scale, bias, jitter, width, and other classic plugin-side latent edits
-- `global/external` mode: latent values are overridden by the flow controller / web UI state
-
-This makes the plugin usable both as:
-
-- a conventional RAVE effect with direct latent parameter shaping
-- a performative latent instrument driven by a dynamic generative controller
-
-### 3. Embedded p5.js web UI inside JUCE
-
-Instead of building the controller entirely as a native JUCE UI, this repo bundles a p5.js interface into the plugin binary and hosts it through `juce::WebBrowserComponent`.
-
-The plugin:
-
-- packages the web assets as binary resources during CMake build
-- writes them to a temp directory at runtime
-- loads the page inside the plugin editor
-- synchronizes host/plugin state through a custom URL bridge
-
-Relevant files:
-
-- `UI_p5js/Latent_Synth_UI/`
-- `rave_vst_latent_synth/source/PluginEditor.cpp`
-- `rave_vst_latent_synth/source/PluginEditorNetworking.cpp`
-
-### 4. Native-mode mold visualizer
-
-The p5.js UI also includes a mold/particle visualizer under native/timbre transform mode that responds to the current latent scale and bias controls. Recent tuning makes this background lighter-weight and more center-focused:
-
-- fewer active mold agents for lower CPU/GPU load
-- agents spawn near the center and respawn there after leaving the canvas
-- sensor and fade ranges are tuned for slower, more persistent trails
-- latent controls still shape speed, turning, density, radius, anisotropy, and stereo spread
-
-### 5. Model management and persistent latent state
-
-Compared with a minimal RAVE plugin, this repo also adds:
-
-- local model discovery/import through the p5.js `Model Explorer`
-- persistent external latent state
-- persistent web-UI flow parameters
-- safer model/runtime handling around buffer updates and latent history writes
-
-The current `Model Explorer` panel is intentionally local-only. It exposes:
-
-- `Local Models`
-- `Load Selected`
-- `Import .ts`
-- `Refresh`
-
-Official model browsing/downloading is not exposed in the plugin UI.
-
-### 6. Packaging work for libtorch on macOS
-
-The build system bundles libtorch into the plugin and sets runtime paths so the plugin can find the shipped libraries from inside the VST3 bundle. The development install script also repairs rpaths, re-signs the bundle, and installs it into the user VST3 folder.
+For the full architecture, implementation details, and design rationale, see the included technical report.
 
 ## Dependencies
 
@@ -211,26 +112,6 @@ On macOS with Homebrew, a practical setup is:
 brew install cmake llvm libomp
 xcode-select --install
 ```
-
-## Dependency Resolution
-
-### JUCE
-
-The build supports two JUCE flows:
-
-- if `rave_vst_latent_synth/juce/` exists locally, CMake uses it
-- otherwise CMake fetches JUCE `6.1.6` automatically from GitHub during configure
-
-This makes the repo buildable from a clean clone without requiring JUCE to be committed into the repository.
-
-### Compiler detection
-
-On macOS, the CMake setup tries to find Homebrew LLVM in both of the common locations:
-
-- `/opt/homebrew/opt/llvm/bin`
-- `/usr/local/opt/llvm/bin`
-
-If neither exists, CMake falls back to the toolchain already configured in the environment or selected by the system.
 
 ## Installing Dependencies
 
@@ -323,13 +204,9 @@ cd rave_vst_latent_synth
 ## Runtime Notes
 
 - Models are expected as TorchScript `.ts` files.
-- The plugin creates a model directory under the user application data path and can import models there from the editor.
 - The p5.js `Model Explorer` panel only manages local models: load an already imported model, import a `.ts` file, or refresh the local model list.
 - `Use Prior` is now disabled by default, so new plugin instances encode the audio input instead of generating from `sample_prior()`.
 - To use the model prior instead, enable `Use Prior` from the p5.js `Audio Params > Model Parameters` section.
-- The p5.js `Audio Params` panel currently exposes only `Output Parameters`, `Model Parameters`, and `Window Size`.
-- In web-only mode, the p5.js latent controller becomes the primary interface.
-- The first 8 latent dimensions are the dimensions actively driven by the external flow controller.
 
 ## Repo Structure
 
