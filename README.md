@@ -2,6 +2,10 @@
 
 Latent Synth is a JUCE-based VST3/Standalone audio plugin built on top of a TorchScript-exported [RAVE](https://github.com/acids-ircam/RAVE) model. It takes incoming audio, encodes it into the RAVE latent space, applies controllable latent transformations, and decodes the result back to audio in real time.
 
+## Technical Report
+
+For detailed technical background, system design, and implementation notes, see the included [Latent Synth Technical Report](Latent_Synth_Technical_Report.pdf).
+
 ## Important
 
 Latent Synth is a host instrument/effect for TorchScript-exported RAVE models. The plugin itself does not ship with pretrained timbres or model files.
