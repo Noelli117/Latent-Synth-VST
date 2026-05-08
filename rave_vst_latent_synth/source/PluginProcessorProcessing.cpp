@@ -399,6 +399,11 @@ void RaveAP::updateEngine(const std::string modelFile) {
   if (_isShuttingDown.load())
     return;
 
+  if (!modelFile.empty()) {
+    _avts.state.setProperty(rave_parameters::model_selection,
+                            juce::String(modelFile), nullptr);
+  }
+
   if (modelFile == _loadedModelName)
     return;
   _loadedModelName = modelFile;

@@ -129,11 +129,20 @@ RaveAPEditor::RaveAPEditor(RaveAP &p, AudioProcessorValueTreeState &vts)
   detectAvailableModels();
   // Model manager button stuff
   _header._modelComboBox.onChange = [this]() {
-    String modelPath =
-        _availableModelsPaths[_header._modelComboBox.indexOfItemId(
-            _header._modelComboBox.getSelectedId())];
+    const int selectedIndex =
+        _header._modelComboBox.indexOfItemId(_header._modelComboBox.getSelectedId());
+    if (selectedIndex < 0 || selectedIndex >= _availableModelsPaths.size()) {
+      return;
+    }
+
+    String modelPath = _availableModelsPaths[selectedIndex];
     audioProcessor.updateEngine(modelPath.toStdString());
   };
+
+  const int initialModelIndex = _header._modelComboBox.getSelectedItemIndex();
+  if (initialModelIndex >= 0 && initialModelIndex < _availableModelsPaths.size()) {
+    audioProcessor.updateEngine(_availableModelsPaths[initialModelIndex].toStdString());
+  }
 
   _header.connectVTS(vts);
   _modelPanel.connectVTS(vts);
@@ -338,6 +347,8 @@ void RaveAPEditor::detectAvailableModels() {
   if (previousIndex >= 0 && previousIndex < _availableModelsPaths.size()) {
     previouslySelectedPath = _availableModelsPaths[previousIndex];
   }
+  const String savedSelectedPath =
+      _avts.state.getProperty(rave_parameters::model_selection).toString();
 
   // Reset list of available models
   _availableModelsPaths.clear();
@@ -371,8 +382,10 @@ void RaveAPEditor::detectAvailableModels() {
   }
 
   int selectedIndex = 0;
-  if (previouslySelectedPath.isNotEmpty()) {
-    const int matchedIndex = _availableModelsPaths.indexOf(previouslySelectedPath);
+  const String preferredSelectedPath =
+      previouslySelectedPath.isNotEmpty() ? previouslySelectedPath : savedSelectedPath;
+  if (preferredSelectedPath.isNotEmpty()) {
+    const int matchedIndex = _availableModelsPaths.indexOf(preferredSelectedPath);
     if (matchedIndex >= 0) {
       selectedIndex = matchedIndex;
     }
